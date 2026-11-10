@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>OscilloscopeAudioCapture</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.oscilloscopemusic.audio-capture</string>
+	<key>CFBundleName</key>
+	<string>phosphor Audio Capture</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.9.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Display system audio as a live stereo X-Y trace in phosphor. Audio stays in memory and is never played back or saved.</string>
+</dict>
+</plist>

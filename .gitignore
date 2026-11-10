@@ -1,0 +1,11 @@
+.venv/
+.audio-deps/
+.qt-deps/
+__pycache__/
+.user/
+*.wav
+transcription_review/
+.DS_Store
+.native/
+.mac-build/
+.win-build/
