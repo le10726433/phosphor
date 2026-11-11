@@ -124,15 +124,15 @@ separate from scenes and appearance. Very complex scenes may need fewer repeats;
 if later edits exceed the detail budget, the status reports Redraw inactive and
 playback uses one pass until count or complexity is reduced.
 
-The current **0.22.0-dev** Qt editor supports **macOS / Metal** and
+The current **0.32.6** Qt editor supports **macOS / Metal** and
 **Windows / Direct3D 11**. Use Python 3.12. macOS system-audio monitoring uses
-native Core Audio taps on macOS 14.2+; Windows retains WASAPI loopback.
+native Core Audio taps (macOS 15 or later for this build); Windows retains WASAPI loopback.
 
-For macOS, follow [the development guide](MACOS_DEVELOPMENT.md), or:
+For macOS, follow [the development guide](docs/MACOS_DEVELOPMENT.md), or:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements-macos.lock.txt
+.venv/bin/python -m pip install -r requirements/requirements-macos.lock.txt
 ./LaunchMac.command
 ```
 
@@ -205,7 +205,7 @@ editor; the retained CPU/Tk editor has no text-entry controls.
 
 ## macOS system-audio monitoring — 0.9.0-dev
 
-Requires macOS 14.2+ and Xcode Command Line Tools for the local helper build.
+Requires macOS 15 or later and Xcode Command Line Tools for the local helper build.
 The helper is already built in this workspace. No virtual audio driver or extra
 Python dependency is needed.
 
@@ -229,7 +229,7 @@ retains per-playback-endpoint selection. Gain, interpolation and CRT effects are
 preview-only. Source/scene/MIDI controls and recording/WAV export stay disabled
 while monitoring. Protected content and app/driver restrictions may yield silence.
 
-See [macOS development](MACOS_DEVELOPMENT.md) for implementation and validation.
+See [macOS development](docs/MACOS_DEVELOPMENT.md) for implementation and validation.
 
 ## GPU editor and rollback
 
@@ -282,7 +282,7 @@ then press **START VISUALIZATION** and play audio in that other application.
 playback devices updates the WASAPI output endpoints. The active endpoint, native
 sample rate/channel count, input peak and capture status appear in the sidebar.
 
-**Visualization input gain** scales the displayed trace from **0–32×**, with
+**Input gain** scales the displayed trace from **0–32×**, with
 numeric entry and a default of **1×**. Double-click the slider to reset it. This
 is a temporary preview control: it does not change playback, captured samples,
 scene settings or the raw input peak meter. Enlarged traces may clip at the viewport.
@@ -324,8 +324,8 @@ and replace their destination only after rendering finishes; wait for export to
 finish before closing the app. Existing scene/preference formats are unchanged.
 
 `python app.py --cpu` launches the retained Tk editor (requires Tkinter). Its
-Ctrl+N also stays in the CPU edition. `python qt_preview.py` retains the small
-viewport test program. [QT_PROTOTYPE.md](QT_PROTOTYPE.md) describes the original
+Ctrl+N also stays in the CPU edition. `python tools/qt_preview.py` retains the small
+viewport test program. [QT_PROTOTYPE.md](docs/QT_PROTOTYPE.md) describes the original
 prototype, the frozen CPU ZIP and current launch commands. The reviewed prototype
 is tagged `oscilloscope-v0.4.0-reviewed`; CPU ZIP/tag remain unchanged.
 
@@ -368,7 +368,7 @@ opening/saving a scene never changes or stores aesthetic preferences, and change
 to appearance do not mark the scene dirty. Audio/exports are unaffected.
 
 **About** shows Made by Mike Le, the project/build dates and version, the approved
-AI transparency statement, and a How to use tab. `build_info.py` holds the release
+AI transparency statement, and a How to use tab. `phosphor/storage/build_info.py` holds the release
 version/build date and in-app instructions; update the build date with a release.
 
 Double-click any slider thumb to reset its default: XYZ=0°, rotation=5 seconds
@@ -376,7 +376,7 @@ per turn, output level=0.55. Defaults remain the same after opening a scene or
 switching the selected shape. Use the sidebar scrollbar for additional controls.
 
 The interface uses **JetBrains Mono**, bundled with its SIL Open Font License in
-`assets/fonts`. Qt loads the fonts privately for the app process, without
+`phosphor/assets/fonts`. Qt loads the fonts privately for the app process, without
 installing them system-wide.
 Font source: [JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono).
 
@@ -404,8 +404,8 @@ off the GUI thread. These optimizations do not change source synthesis, geometry
 MIDI voices or recorded sample fidelity. Install the updated requirements for
 Pillow, which is used for cached preview images.
 
-Run `python -m unittest discover -p "test_*.py"` for the 62 unit/regression tests.
-Run `python smoke_qt_editor.py` separately in a Windows desktop session for native
+Run `python -m unittest discover -s tests/unit -t .` for the unit/regression tests.
+Run `python tests/smoke/smoke_qt_editor.py` separately in a Windows desktop session for native
 GPU/control/drag/reset/preferences/scene integration checks. It uses temporary
 files and does not overwrite personal preferences. For timed checks:
 
@@ -417,13 +417,13 @@ Measured on this Windows workspace with the same stereo replay, one cube and an
 1180×820 app window: median full frame cost (including Tk paint) changed from
 60.38 ms to 10.27 ms with CRT effects enabled, and from 6.73 ms to 2.68 ms with
 effects disabled. Measurements depend on hardware, viewport size and scene;
-they are not a guarantee for every setup. See [PERFORMANCE.md](PERFORMANCE.md).
+they are not a guarantee for every setup. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 To rerun the repeatable viewport benchmark (it opens a test window, without
 playing sound or opening MIDI devices):
 
 ```powershell
-python benchmark_viewport.py
+python tools/benchmark_viewport.py
 ```
 
 ## Live MIDI controller mode
@@ -593,9 +593,8 @@ center, after its existing animated pose. Zero preserves the original view
 returns all three offsets to zero. They also work on polygons and the tilting
 circle, retaining depth until the final orthographic projection.
 
-Set Seconds per revolution to No rotation for a stationary view, then adjust
-the axes to inspect the shape. Otherwise the manual offsets combine with the
-animation. Each instance retains its own angles when selected, duplicated or
+Shapes are stationary unless an X/Y/Z spin is set; spins add to the manual
+offsets. Each instance retains its own angles when selected, duplicated or
 removed. These controls affect the generated X–Y trajectory, live audio, processed
 WAV exports and recording metadata. The projection remains orthographic; the
 controls change orientation rather than lens perspective or camera distance.
@@ -710,9 +709,9 @@ Moving/resizing during playback may create audible transients.
   existing tilted orthographic view. Any combination can share the scene.
 - Tilting circle: a 128-segment circular wireframe rotating out of the X–Y plane
   about Y. It starts as a circle, becomes an ellipse, is a vertical line at a
-  quarter-turn, and returns through an ellipse to a circle at a half-turn. Its
-  full physical revolution uses the selected rotation period; the outline repeats
-  twice per revolution. No rotation shows a face-on circle.
+  quarter-turn, and returns through an ellipse to a circle at a half-turn, when
+  given a Y spin; the outline repeats twice per revolution. Without spin it is a
+  face-on circle.
 - Octant sphere: three perpendicular great circles in the XY, XZ, and YZ planes,
   each approximated by 96 segments. Their six shared axis poles are merged into
   graph junctions, forming eight spherical octants. All rings are visible through
@@ -721,12 +720,10 @@ Moving/resizing during playback may create audible transients.
   tilted 3D rotation view. This is a three-ring wireframe, not a shaded surface.
 - Rotation updates: 60 Hz initially. This updates geometry, not audio pitch or
   drawing repetition. Allowed range is 1–240 Hz.
-- Seconds per revolution: linked logarithmic slider and optional number entry,
-  independently for each shape. Left is 0.01 seconds per turn. Finite slider
-  values extend to 3600 seconds; the far-right stop is **∞ No rotation**.
-  You can type a larger finite period, or `inf`, `∞`, `off`, or `No rotation`.
-  Stopped shapes use the fixed reference pose. No rotation is represented as
-  `null` in recording JSON, keeping the metadata standard-compliant.
+- X/Y/Z spin: revolutions per second about each viewport axis, per shape,
+  -10 to 10. The sliders are finer near 0 and coarser toward the ends. Scene
+  version 8 removed the former seconds-per-revolution rotation; earlier scene
+  files are rejected.
 - Tempo: initially quarter note = 120 BPM, adjustable for either source. The scale
   uses C-major C3 through C6 and descending.
   Turnaround endpoints are not doubled: 42 notes / 21 seconds per scale loop.
@@ -774,7 +771,7 @@ scale displays a diagonal line, as expected.
 ## Verify
 
 ```powershell
-python -m unittest discover -s . -p "test_*.py"
+python -m unittest discover -s tests/unit -t .
 ```
 
 Tests cover topology/routes, on-edge mathematical samples, independent rotation,
@@ -796,6 +793,6 @@ restores the previous view and normal square editor. These are preview effects.
 
 ## Future design discussions
 
-[Shape constructor and musical timeline](SHAPE_BUILDER_AND_TIMELINE.md) collects
+[Shape constructor and musical timeline](docs/SHAPE_BUILDER_AND_TIMELINE.md) collects
 the proposed drawing tools, snapping, geometry model, GUI and MIDI sequencing
 workflow. It is a discussion draft; these features are not implemented yet.

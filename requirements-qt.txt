@@ -1,2 +1,0 @@
--r requirements.txt
-# Compatibility entry point; the main app now includes Qt.

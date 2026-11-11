@@ -1,5 +1,24 @@
 # Application changes
 
+## 0.32.6 — Bloom, decay editor, device-rate audio and X(t)/Y(t) sweep (November 10, 2026)
+
+- **Phosphor:** glow is now bloom of the energy buffer, continuous around sharp corners.
+  Preferences shows a decay preview, editable by dragging or typing; editing a preset
+  saves it as a Custom profile. Phosphor intensity reaches 64×, and a Phosphor
+  brightness slider sits under the scope. Grid lines can be turned off.
+- **Audio:** playback, Live MIDI and macOS system capture run at the output device's
+  rate. WAV exports stay at 48 kHz. Live MIDI blocks scale to about 5 ms above 48 kHz,
+  and harmonics are summed with Horner's rule, so held chords keep up with real time.
+- **System audio:** an X(t), Y(t) sweep on the phosphor display, with X, Y or Both
+  triggers, rising or falling edge, trace separation and a 0.1–2000 ms scan window.
+- **Rotation:** seconds per revolution is removed; X/Y/Z spin is the only rotation and
+  new objects start still. Spin, input gain and intensity use finer-near-zero sliders.
+- **Breaking:** scene files are version 8 only. Scenes saved by 0.31.0 are rejected.
+- **Fixes:** a resize crash on Direct3D 11; a crash on quit after using the shape
+  builder; fullscreen toggles rewriting the preferences file.
+- **Layout:** the app is now the `phosphor` package, with `tests/`, `tools/`, `docs/`,
+  `native/` and `requirements/` folders. `app.py` is the only entry point.
+
 ## 0.31.0 — first public release (November 9, 2026)
 
 - phosphor is now free software under the GNU GPL v3 or later, published with a

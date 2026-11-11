@@ -25,12 +25,12 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          python -m pip install -r requirements-macos.lock.txt
-          python -m pip install -r requirements-macos-build.txt
+          python -m pip install -r requirements/requirements-macos.lock.txt
+          python -m pip install -r requirements/requirements-macos-build.txt
       - name: Unit tests
-        run: python check_core.py
+        run: python tools/check_core.py
       - name: Build app and DMG
-        run: python build_macos_app.py --dmg
+        run: python tools/build_macos_app.py --dmg
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -47,11 +47,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install -r requirements.txt
-          python -m pip install -r requirements-windows-build.txt
+          python -m pip install -r requirements/requirements-windows-build.txt
       - name: Unit tests
-        run: python check_core.py
+        run: python tools/check_core.py
       - name: Build app and zip
-        run: python build_windows_app.py
+        run: python tools/build_windows_app.py
       - uses: actions/upload-artifact@v4
         with:
           name: windows
