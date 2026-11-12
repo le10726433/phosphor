@@ -2,6 +2,7 @@
 from dataclasses import replace
 from phosphor.storage.app_files import scene_document, read_scene, atomic_json
 from phosphor.engine.signal_engine import Settings, Shape, scene_shapes, validate
+from phosphor.engine.function_plot import FunctionPlot
 import uuid
 
 
@@ -9,12 +10,13 @@ class Scene:
     def __init__(self):
         self.settings = replace(Settings(), travel_mode='Faster travel', travel_speed=64.,
                                 shapes=(Shape(solid='Tilting circle'),))
-        self.mode, self.device = 'mixed', ''
+        self.mode, self.device = 'drawing', ''
+        self.function = FunctionPlot()  # Played when Monitor input is Function x(t), y(t).
         self.selected = 0
         self.path = None
         self.saved = self.document()
 
-    def document(self): return scene_document(self.settings, self.mode, self.device)
+    def document(self): return scene_document(self.settings, self.mode, self.device, self.function)
 
     @property
     def dirty(self): return self.document() != self.saved
@@ -68,7 +70,8 @@ class Scene:
         self.path, self.saved = path, document
 
     def load(self, path):
-        settings, mode, device = read_scene(path)
+        settings, mode, device, function = read_scene(path, with_function=True)
         self.settings = replace(settings, shapes=tuple(scene_shapes(settings)))
         self.mode, self.device, self.path, self.selected = mode, device, path, 0
+        self.function = function
         self.saved = self.document()

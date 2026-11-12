@@ -4,10 +4,69 @@ For key features, the program structure, how shapes are generated and how the
 phosphor screen is simulated, see the [project README](README.md). This guide
 holds detailed notes by feature; version headings mark when each was added.
 
-The header and running app icon use the green, amber, cyan or white logo matching
+The running app icon uses the green, amber, cyan or white logo matching
 Appearance. On macOS this updates the running Dock icon; a pinned Python launcher
 may still show Python's icon while phosphor is closed. The capture helper keeps
 its existing bundle identifier/path, with phosphor as its new display name.
+
+## Function plots, video input, builder text and route minimizing — 0.36.1
+
+The INPUT/SCENE/MIX controls sit to the right of the viewport. New scenes start in
+**Fully shaped audio**; scene files keep their own listening mode.
+
+**Function plots.** Set **INPUT → Monitor input** to **Function x(t), y(t)** and edit
+the two expressions in the **X(t), Y(t)** tab. They use Python maths syntax: `t` is
+seconds, `s` is the 0–1 cycle position at the **s frequency**, and you can add up to
+8 variables, each with a slider. `sin`, `cos`, `tau` and the other `math` functions
+are available, each taking an exact number of arguments. Only maths is accepted, so
+a scene or preset file cannot run code. Output above ±1 is clipped and **MIX →
+Output level** scales it; WAV export is not offered for function plots yet. Scenes
+save the functions. **Save as preset…** and **Delete saved…** manage your presets,
+kept in `function-presets.json` in the user folder.
+
+**Video input.** **INPUT → Monitor input → Video file (phosphor CRT)** opens a video
+and plays it with sound. Each display step deposits one 60 Hz field of scanlines
+(240, 480, 576 or 720 lines) into the phosphor energy buffer, so the phosphor's
+decay, the beam profile, glow, grain and shimmer all apply. With the phosphor display
+off, the video uses the palette colour. Decoding is Qt Multimedia's FFmpeg backend,
+and frames stay on the GPU. The picture is letterboxed in the square viewport; there
+is no rolling scan band or interlace yet.
+
+**Builder text, bold and extrude.** In the shape builder (**Build shape…**), the **Text** tool
+takes typed text and a size; click the canvas to place it. Letters become ordinary
+strokes, centred on the click and selected, so they can be moved, edited, bolded or
+extruded. With strokes selected, the panel shows **Bold width** and **Extrude depth**
+in place of the single-node controls:
+
+- **Bold width** traces the outline of the strokes fattened to that width, with round
+  caps and joins. Overlaps between joined strokes are removed, so an H or E is one
+  closed outline; letters with holes need one travel link per hole.
+- **Extrude depth** adds front and back copies at ±depth/2 along Z, joined at the
+  corners. Turn or spin the shape in Transform to see it.
+
+Styles follow their shapes through moves, joins, copy/paste and Undo. Bold plus
+extrude can make a route several times longer, so high source pitches undersample
+it; lower pitches or thinner shapes trace cleanly. Shape files are version 5, and
+scene files version 10.
+
+**Route minimizing.** **Preferences → Signal output → Route minimizing** plans each
+shape's own beam route, for builder drawings, text, imported models and built-in
+solids:
+
+- **Off** keeps the original routes, sample for sample.
+- **Shortest jumps** keeps how each connected part is traced and visits separate
+  parts nearest-first.
+- **Shortest total path** (the default) retraces or jumps between odd-degree points,
+  whichever is shorter, and traces the result in one circuit.
+
+A plan is used only if it is shorter, and jumps count as travel for **MIX → Faster
+travel**. The builder's dashed lines show the jumps of the selected mode. This is a
+machine preference, not saved in scenes, and it changes the sound of existing scenes
+unless set to Off.
+
+**Grain and shimmer.** **Preferences → Phosphor grain** adds a screen-fixed grain and
+**Beam shimmer** varies new light from frame to frame. Both default to 0, the
+unchanged look, and never affect audio.
 
 ## Shape builder — first usability review
 
@@ -155,10 +214,9 @@ fullscreen** hides controls, menus/status, editing handles and axes for immersio
 The grid, trace and CRT appearance remain as configured. Press **Escape** to
 restore the previous view; if that was fullscreen, Escape again exits fullscreen.
 
-The left panel's **X(t), Y(t)** tab plots the actual left/right PCM against time
-for the recent 40 ms window. It works for generated signals and system audio.
-**Freeze these traces** holds the plots while audio/capture continues. System-audio
-visualization gain/interpolation do not alter these raw diagnostic plots.
+The 40 ms X(t), Y(t) time traces were removed in 0.36.1; that tab now edits a
+function plot. For system audio, the **X(t), Y(t) sweep** display draws both channels
+against time on the phosphor screen.
 
 **Preferences → Signal output → Hardware corner dwell** sets a nominal hold at
 sharp turns, from **0–500 microseconds**, initially **0**. It affects actual generated

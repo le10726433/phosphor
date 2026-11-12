@@ -155,11 +155,11 @@ class SpinTests(unittest.TestCase):
                 validate(Settings(shapes=(Shape(spin_y=value),)))
 
     def test_scene_storage_only_changes_when_spin_is_used(self):
-        self.assertEqual(scene_document(Settings(), 'mixed', '')['version'], 8)
+        self.assertEqual(scene_document(Settings(), 'mixed', '')['version'], 10)
         self.assertNotIn('spin_x', scene_document(Settings(shapes=(Shape(),)), 'mixed', '')['shapes'][0])
         settings = Settings(shapes=(Shape(spin_z=2.5),))
         document = scene_document(settings, 'mixed', '')
-        self.assertEqual(document['version'], 8)
+        self.assertEqual(document['version'], 10)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'spin.json'
             atomic_json(path, document)

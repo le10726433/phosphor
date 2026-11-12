@@ -88,6 +88,8 @@ class AudioPreview:
         self.underruns = 0
         self.frames = 0
         self.midi = LiveMidi()
+        # A CompiledPlot replaces the scene render while set (Function x(t), y(t) input).
+        self.function = None
         self.live = False
         self.block_frames = self.BLOCK_FRAMES
         self.output_latency = 0.
@@ -123,7 +125,7 @@ class AudioPreview:
         except ImportError as error:
             raise RuntimeError('Install playback support: python -m pip install -r requirements.txt') from error
         render(np.arange(2) / settings.sample_rate, settings)
-        self.live = settings.source == MIDI_SOURCE
+        self.live = settings.source == MIDI_SOURCE and self.function is None
         if self.live:
             # Avoid the first note paying for the Fourier coefficient cache.
             from phosphor.audio.midi_synth import coefficients, FAMILIES
@@ -185,12 +187,18 @@ class AudioPreview:
     def _next_block(self, count):
         settings, mode = self.parameters
         times = (self.frames + np.arange(count)) / settings.sample_rate
-        if self.live:
+        function = self.function
+        if function is not None:
+            try: signal = (function(times)*settings.drawing_gain).astype('float32')
+            except ValueError as error:
+                self.error = str(error); signal = np.zeros((count, 2), dtype='float32')
+        elif self.live:
             self.midi.process(self.frames, settings, mode)
             drawing, music, mixed = self.midi.render(times, settings)
         else:
             drawing, music, mixed = render(times, settings)
-        signal = select_signal(drawing, music, mixed, settings, mode, clip_output=False).astype('float32')
+        if function is None:
+            signal = select_signal(drawing, music, mixed, settings, mode, clip_output=False).astype('float32')
         self.clipped_samples += int(np.count_nonzero(abs(signal) > 1))
         signal = np.clip(signal, -1, 1)
         # Brief startup ramp avoids a hard jump when playback begins.

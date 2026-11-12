@@ -41,14 +41,17 @@ from phosphor.display.crt_theme import PALETTES
 from phosphor.display.branding import APP_NAME, logo_path
 from phosphor.editor.qt_scene import Scene
 from phosphor.display.qt_scope import GpuScope
-from phosphor.display.time_trace import TimeTrace
+from phosphor.editor.function_panel import FunctionPanel
+from phosphor.editor.video_player import VideoPanel, VideoPlayer, LINE_WIDTH, field_gain, clock
+from phosphor.engine.function_plot import CompiledPlot
 from phosphor.display.time_sweep import DEFAULT_WINDOW_MS, EDGES, EDGE_RISING, SEPARATION_RANGE, TRIGGERS, TRIGGER_BOTH, TRIGGER_X, WINDOW_RANGE_MS, DualSweep
 from phosphor.storage.signal_preferences import (SIGNAL_PREFERENCES_PATH, DEFAULT_SIGNAL_PREFERENCES,
     validated_signal_preferences,read_signal_preferences,MAX_REDRAWS)
 from phosphor.engine.corner_dwell import MAX_DWELL_US
+from phosphor.engine.route_plan import ROUTE_MODES
 from phosphor.audio.system_audio import SystemAudio
 from phosphor.display.trace_interpolation import INTERPOLATION_FACTORS, interpolate_trace
-from phosphor.display.phosphor import BEAM_GAUSSIAN, BEAM_PROFILES, PHOSPHOR_CUSTOM, PHOSPHOR_NAMES, PHOSPHOR_OFF, DEFAULT_CUSTOM_PROFILE, beam_uniforms, bloom_uniforms, deposit_vertices, gaussian_beam, new_sample_count, phosphor_profile, phosphor_uniforms
+from phosphor.display.phosphor import BEAM_GAUSSIAN, BEAM_PROFILES, PHOSPHOR_CUSTOM, PHOSPHOR_NAMES, PHOSPHOR_OFF, PHOSPHOR_PALETTE, DEFAULT_CUSTOM_PROFILE, beam_uniforms, bloom_uniforms, deposit_vertices, gaussian_beam, new_sample_count, phosphor_profile, phosphor_uniforms
 from phosphor.editor.phosphor_editor import PhosphorEditor
 from phosphor.display.qt_phosphor import PhosphorLayer
 from phosphor.display.glow_trail import VISUAL_DEFAULTS, VISUAL_RANGES
@@ -192,6 +195,10 @@ class Window(QMainWindow):
         self.audio = AudioPreview()
         self.capture = SystemAudio()
         self.system_monitor = False
+        self.function_monitor = False  # Monitor input: Function x(t), y(t).
+        self.video_monitor = False  # Monitor input: Video file (phosphor CRT).
+        self.video = None  # VideoPlayer, created on first use.
+        self.function_compiled = None
         self.visualization_gain = 1.
         # System-audio X(t)/Y(t) sweep on the phosphor display (display only).
         self.sweep = DualSweep(); self.sweep_mode = False; self.sweep_trigger = TRIGGER_X; self.sweep_edge = EDGE_RISING
@@ -283,18 +290,7 @@ class Window(QMainWindow):
         self.splitter.setChildrenCollapsible(False); body.addWidget(self.splitter)
         self.sidebar = sidebar = QWidget(); sidebar.setMinimumWidth(340); sidebar.setMaximumWidth(640)
         left = QVBoxLayout(sidebar); left.setContentsMargins(0,0,0,0); left.setSpacing(8)
-        self.splitter.addWidget(sidebar)
-        self.brand_logo = QLabel(); self.brand_logo.setObjectName('brand')
-        self.brand_logo.setFixedSize(64,64)
-        self.brand_logo.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.brand_logo.setAccessibleName(APP_NAME)
-        brand_row = QHBoxLayout(); brand_row.setSpacing(12)
-        brand_row.addWidget(self.brand_logo)
-        # Register macOS Courier explicitly, including when Qt runs offscreen.
-        if sys.platform=='darwin': QFontDatabase.addApplicationFont('/System/Library/Fonts/Courier.ttc')
-        self.brand_text = QLabel('SOUND LAB'); self.brand_text.setObjectName('brandText')
-        brand_row.addWidget(self.brand_text); brand_row.addStretch()
-        left.addLayout(brand_row)
+        self.splitter.addWidget(sidebar)  # The viewport is inserted before it: controls sit on the right.
         self.tabs = QTabWidget(); left.addWidget(self.tabs,1)
         panels = []
         self.control_scrolls = []
@@ -306,7 +302,7 @@ class Window(QMainWindow):
             scroll.setWidget(panel); self.tabs.addTab(scroll,title); panels.append(layout)
         inp, scene, mix = panels
         inp.addWidget(QLabel('Monitor input'))
-        self.monitor = QComboBox(); self.monitor.addItems(['Generated scene / MIDI','System audio (visualization)'])
+        self.monitor = QComboBox(); self.monitor.addItems(['Generated scene / MIDI','System audio (visualization)','Function x(t), y(t)','Video file (phosphor CRT)'])
         if not SYSTEM_AUDIO_AVAILABLE:
             self.monitor.setItemText(1,'System audio — unavailable on macOS')
             self.monitor.model().item(1).setEnabled(False)
@@ -361,6 +357,10 @@ class Window(QMainWindow):
             permission.setWordWrap(True); capture_layout.addWidget(permission)
         self.capture_status = QLabel(); self.capture_status.setWordWrap(True); capture_layout.addWidget(self.capture_status)
         inp.addWidget(self.capture_panel); self.capture_panel.hide()
+        self.function_note = QLabel('Plays the x(t), y(t) functions. Edit them in the X(t), Y(t) tab.')
+        inp.addWidget(self.function_note); self.function_note.hide()
+        self.video_panel = VideoPanel(SliderInput); inp.addWidget(self.video_panel); self.video_panel.hide()
+        self.video_panel.open_requested.connect(self.open_video)
         self.generated_panel = QWidget(); inp.addWidget(self.generated_panel)
         generated = QVBoxLayout(self.generated_panel); generated.setContentsMargins(0,0,0,0)
         self.input_sections = QTabWidget(); generated.addWidget(self.input_sections)
@@ -424,17 +424,18 @@ class Window(QMainWindow):
         self.combo(mix,'Listening mode','mode',('Processed output','Fully shaped audio','Original audio'))
         self.buttons(mix,[('Export source…',lambda:self.export(True)),('Export output…',self.export)])
         mix.addWidget(QLabel('Left = X · Right = Y · output device rate\nTravel strategies approximate blanking;\nthey do not control CRT intensity.'))
-        time_panel=QWidget();time_layout=QVBoxLayout(time_panel)
-        time_layout.addWidget(QLabel('X and Y against time · recent 40 ms'))
-        self.time_trace=TimeTrace();time_layout.addWidget(self.time_trace,1)
-        freeze=QCheckBox('Freeze these traces');freeze.toggled.connect(lambda enabled:setattr(self.time_trace,'frozen',enabled));time_layout.addWidget(freeze)
-        time_layout.addWidget(QLabel('Same raw playback/capture samples as the X–Y view. Display gain and interpolation are excluded. Freeze does not stop audio.'))
-        self.tabs.addTab(time_panel,'X(t), Y(t)')
+        self.function_panel = FunctionPanel(SliderInput,self.scene.function)
+        self.function_panel.changed.connect(self.function_changed)
+        self.function_panel.monitor_requested.connect(lambda:self.monitor_changed(2))
+        function_scroll = QScrollArea(); function_scroll.setWidgetResizable(True); function_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        function_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); function_scroll.setWidget(self.function_panel)
+        self.control_scrolls.append(function_scroll)
+        self.tabs.addTab(function_scroll,'X(t), Y(t)')
         self.play_button = QPushButton('▶ PLAY AUDIO'); self.play_button.clicked.connect(self.play); left.addWidget(self.play_button)
         right_panel = QWidget(); right = QVBoxLayout(right_panel); right.setContentsMargins(0,0,0,0)
-        self.splitter.addWidget(right_panel)
-        self.splitter.setStretchFactor(0,0); self.splitter.setStretchFactor(1,1)
-        self.splitter.setSizes([400,780])
+        self.splitter.insertWidget(0,right_panel)
+        self.splitter.setStretchFactor(0,1); self.splitter.setStretchFactor(1,0)
+        self.splitter.setSizes([780,400])
         self.viewer_heading=QLabel('X–Y SIGNAL MONITOR');right.addWidget(self.viewer_heading)
         # Normal editing stays square; immersive mode extends the background to the screen.
         self.stage = SquareStage(); self.host = self.stage.host
@@ -453,7 +454,6 @@ class Window(QMainWindow):
         self.brightness_save = QTimer(self); self.brightness_save.setSingleShot(True); self.brightness_save.setInterval(400)
         self.brightness_save.timeout.connect(self.save_brightness)
         for label in sidebar.findChildren(QLabel):
-            if label in (self.brand_logo,self.brand_text): continue
             if label.property('inlineCaption'): continue  # Keeps a one-line width beside its slider.
             label.setWordWrap(True); label.setMinimumWidth(0)
             policy = QSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Maximum)
@@ -514,7 +514,7 @@ class Window(QMainWindow):
             try:planned_path(0,settings.drawing_hz,scene_shapes(settings),settings.travel_mode,settings.travel_speed,0.,count)
             except ValueError as error:count=1;self.redraw_notice='Redraw inactive: '+str(error)
         # Playback renders at the output device's rate (AudioPreview.sample_rate).
-        return replace(self.scene.settings,corner_dwell_us=dwell,motion_time_offset=self.motion_audio_offset if self.audio.running else 0.,shape_redraw_count=count,sample_rate=self.audio.sample_rate)
+        return replace(self.scene.settings,corner_dwell_us=dwell,motion_time_offset=self.motion_audio_offset if self.audio.running else 0.,shape_redraw_count=count,route_mode=self.signal_preferences['route_mode'],sample_rate=self.audio.sample_rate)
 
     def restart_motion(self):
         self.motion_epoch=time.perf_counter()
@@ -532,6 +532,7 @@ class Window(QMainWindow):
             settings=self.scene.settings
             planned_path(0,settings.drawing_hz,scene_shapes(settings),settings.travel_mode,settings.travel_speed,0.,value['shape_redraw_count'])
         self.signal_preferences=value
+        if getattr(self,'builder',None) is not None:self.builder.route_mode=value['route_mode'];self.builder.canvas.update()
         self.audio.parameters=(self.output_settings(),self.scene.mode)
 
     def show_signal_preferences(self):
@@ -547,13 +548,17 @@ class Window(QMainWindow):
         redraw.toggled.connect(count.setEnabled)
         redraw_info=QLabel('Total draws per shape before moving to the next (1 = unchanged).\nOnly applies with multiple drawable shapes; motion guides do not count.\nRepeats fit the existing source cycle. Fewer samples per trace; shaped timbre can change.')
         redraw_info.setWordWrap(True);layout.addWidget(redraw_info)
+        layout.addWidget(QLabel('Route minimizing'))
+        route=QComboBox();route.setObjectName('route_mode');route.addItems(ROUTE_MODES);route.setCurrentText(baseline['route_mode']);layout.addWidget(route)
+        route_info=QLabel('Each shape\'s own beam path, for every shape type. Shortest jumps keeps how each\npart is traced and visits separate parts nearest-first. Shortest total path also\nretraces as little as possible, using straight jumps where shorter. A shape keeps\nits original route if a plan is not shorter. Scene object order is unchanged.')
+        route_info.setWordWrap(True);layout.addWidget(route_info)
         info=QLabel('Changes actual generated X/Y audio, MIDI shaping and processed WAV exports.\nOriginal/source audio and system-audio capture are unchanged.\nUse Fully shaped audio or blend 0 for clean corner holds.\n\nSource cycle timing is preserved; timbre can change. Total dwell is capped at 25%.\nHigh notes or many corners may shorten the requested hold. One sample is\n20.83 µs at 48 kHz (10.42 µs at 96 kHz); short holds may receive no samples.\n\nMore dwell brightens corners and speeds up the edges. It may not correct\nDAC filtering or phase errors. Start at 0 and increase gradually.\nThis hardware preference is saved separately from scenes and appearance.')
         info.setWordWrap(True);layout.addWidget(info)
-        def current():return dict(corner_dwell_us=slider.value,shape_redraw=redraw.isChecked(),shape_redraw_count=count.value())
+        def current():return dict(corner_dwell_us=slider.value,shape_redraw=redraw.isChecked(),shape_redraw_count=count.value(),route_mode=route.currentText())
         def preview(*args):
             try:self.apply_signal_preferences(current())
             except ValueError as error:self.error(error)
-        slider.edited.connect(preview);redraw.toggled.connect(preview);count.valueChanged.connect(preview)
+        slider.edited.connect(preview);redraw.toggled.connect(preview);count.valueChanged.connect(preview);route.currentTextChanged.connect(preview)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Apply|QDialogButtonBox.StandardButton.Cancel|QDialogButtonBox.StandardButton.RestoreDefaults);layout.addWidget(buttons)
         def apply():
             nonlocal baseline
@@ -563,7 +568,7 @@ class Window(QMainWindow):
             except (ValueError,OSError) as error:self.error(error);return False
         buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(apply)
         def defaults():
-            redraw.setChecked(False);count.setValue(1);slider.commit(0.)
+            redraw.setChecked(False);count.setValue(1);route.setCurrentText(DEFAULT_SIGNAL_PREFERENCES['route_mode']);slider.commit(0.)
         buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(defaults)
         buttons.accepted.connect(lambda:dialog.accept() if apply() else None);buttons.rejected.connect(dialog.reject)
         dialog.finished.connect(lambda result:(self.apply_signal_preferences(baseline),setattr(self,'signal_dialog',None)))
@@ -607,18 +612,70 @@ class Window(QMainWindow):
         try:
             self.audio.stop(); self.capture.stop()
             self.system_monitor = index == 1
-            self.generated_panel.setEnabled(not self.system_monitor)
-            self.generated_panel.setVisible(not self.system_monitor)
+            self.function_monitor = index == 2
+            if self.video is not None and self.video_monitor and index != 3: self.video.player.pause()
+            self.video_monitor = index == 3
+            generated = not (self.system_monitor or self.function_monitor or self.video_monitor)
+            self.generated_panel.setEnabled(generated)
+            self.generated_panel.setVisible(generated)
             self.capture_panel.setVisible(self.system_monitor)
+            self.function_note.setVisible(self.function_monitor)
+            self.video_panel.setVisible(self.video_monitor)
+            self.function_panel.set_active(self.function_monitor)
+            self.audio.function = self.function_compiled if self.function_monitor else None
             self.update_viewer_heading()
-            for tab in (1,2): self.tabs.setTabEnabled(tab,not self.system_monitor)
+            self.tabs.setTabEnabled(1,generated)
+            self.tabs.setTabEnabled(2,not (self.system_monitor or self.video_monitor))
+            self.tabs.setTabEnabled(3,not (self.system_monitor or self.video_monitor))
+            if not generated: self.drag = None; self.handles = []
+            if self.system_monitor or self.video_monitor: self.tabs.setCurrentIndex(0)
             if self.system_monitor:
-                self.tabs.setCurrentIndex(0); self.drag = None; self.handles = []
                 if self.capture_devices.count() == 1: self.refresh_capture_devices()
+            if self.function_monitor: self.tabs.setCurrentIndex(3)
+            blocker = QSignalBlocker(self.monitor); self.monitor.setCurrentIndex(index)
             self.last_status = 0
         except Exception as error:
-            blocker = QSignalBlocker(self.monitor); self.monitor.setCurrentIndex(1 if self.system_monitor else 0)
+            blocker = QSignalBlocker(self.monitor); self.monitor.setCurrentIndex(1 if self.system_monitor else 2 if self.function_monitor else 3 if self.video_monitor else 0)
             self.error(error)
+
+    def video_player(self):
+        """The media player, wired to the phosphor layer's VideoOutput (created on first use)."""
+        if self.host.phosphor is None: raise RuntimeError('Video needs the phosphor display, which is unavailable on this system.')
+        output = self.host.phosphor.video_output()
+        if self.video is None:
+            self.video = VideoPlayer(); self.video_panel.attach_player(self.video)
+        self.video.attach(output)
+        return self.video
+
+    def open_video(self, path=None):
+        try:
+            path = path or self.video_panel.choose_file(self)
+            if not path: return
+            player = self.video_player()
+            player.open(path)
+            self.video_panel.name.setText(Path(path).name)
+            player.player.play()
+            self.last_status = 0
+        except Exception as error: self.error(error)
+
+    def refresh_function(self):
+        """Recompile the scene's function plot when it changed (edits, open, new)."""
+        plot = self.scene.function
+        if self.function_compiled is None or self.function_compiled.plot != plot:
+            try: self.function_compiled = CompiledPlot(plot)
+            except ValueError as error: self.function_compiled = None; self.status.setText(str(error))
+            if self.function_monitor: self.audio.function = self.function_compiled
+        self.function_panel.set_plot(plot)
+
+    def function_changed(self, plot):
+        self.scene.function = plot
+        self.refresh_function(); self.update_title()
+
+    def function_signal(self, times, settings):
+        """Scaled function output, unclipped, at the playback gain."""
+        if self.function_compiled is None: return np.zeros((len(times),2))
+        try: return self.function_compiled(times)*settings.drawing_gain
+        except ValueError: return np.zeros((len(times),2))
 
     def refresh_capture_devices(self):
         if self.capture_scanning or self.capture.running: return
@@ -681,6 +738,7 @@ class Window(QMainWindow):
         self.midi_file_label.setToolTip(self.scene.settings.midi_file)
         self.build_button.setText('Edit shape…' if self.scene.shape.solid==CUSTOM_OBJECT else 'Build shape…')
         self.audio.parameters = (self.output_settings(),self.scene.mode)
+        self.refresh_function()
         self.update_title()
 
     def update_title(self):
@@ -705,13 +763,13 @@ class Window(QMainWindow):
     def error(self, error): QMessageBox.critical(self,'phosphor',str(error))
 
     def open_builder(self):
-        if self.system_monitor:
+        if self.system_monitor or self.function_monitor or self.video_monitor:
             self.error('Switch to Generated scene / MIDI before building a shape.');return
         self.exit_view_modes()
         if self.isFullScreen():self.showNormal()
         if self.builder is None:
             from phosphor.editor.shape_builder import ShapeBuilder
-            self.builder=ShapeBuilder(ViewHost,self.centralWidget());self.body.addWidget(self.builder)
+            self.builder=ShapeBuilder(ViewHost,self.centralWidget());self.body.addWidget(self.builder);self.builder.route_mode=self.signal_preferences['route_mode']
             self.builder.applied.connect(self.apply_custom_drawing)
             self.builder.back.connect(self.leave_builder)
             self.builder.play_button.clicked.connect(self.play)
@@ -815,6 +873,7 @@ class Window(QMainWindow):
 
     def shutdown_audio(self):
         self.capture.stop(); self.audio.stop(); self.audio.midi.disconnect()
+        if self.video is not None: self.video.player.stop()
 
     def new_instance(self):
         if self.building and not self.leave_builder():return
@@ -832,6 +891,7 @@ class Window(QMainWindow):
     def release_views(self):
         # The builder's preview has its own phosphor layer. Left attached, Qt destroys it
         # during interpreter shutdown in an order that segfaults.
+        if self.video is not None: self.video.detach()  # Before its VideoOutput is released.
         self.host.release_phosphor()
         if self.builder is not None: self.builder.preview.release_phosphor()
 
@@ -847,6 +907,11 @@ class Window(QMainWindow):
 
     def play(self):
         try:
+            if self.video_monitor:
+                if self.video is None or self.video.player.source().isEmpty(): self.open_video()
+                else: self.video.toggle()
+                self.last_status = 0
+                return
             if self.system_monitor:
                 if self.capture.running: self.capture.stop()
                 else:
@@ -855,6 +920,11 @@ class Window(QMainWindow):
                 self.last_status = 0
                 return
             if self.audio.running: self.audio.stop()
+            elif self.function_monitor:
+                if self.function_compiled is None: raise ValueError('Fix the x(t), y(t) expressions before playing.')
+                self.audio.function = self.function_compiled
+                settle_garbage()
+                self.audio.start(replace(self.output_settings(),motion_time_offset=0.),self.scene.mode)
             else:
                 if self.scene.settings.source == MIDI_SOURCE and self.audio.midi.port is None:
                     raise ValueError('Connect a MIDI input before starting Live MIDI audio.')
@@ -897,6 +967,10 @@ class Window(QMainWindow):
         if self.system_monitor:
             QMessageBox.information(self,'System audio','System-audio mode is visualization only; WAV export is disabled.'); return
         if self.exporting: return
+        if self.function_monitor:
+            QMessageBox.information(self,'Export','WAV export of the x(t), y(t) functions is not available yet.'); return
+        if self.video_monitor:
+            QMessageBox.information(self,'Export','Video input is display only; WAV export is disabled.'); return
         if self.scene.settings.source == MIDI_SOURCE:
             QMessageBox.information(self,'Export','Use Record performance for live MIDI.'); return
         path,_ = QFileDialog.getSaveFileName(self,'Export source WAV' if source_only else 'Export processed WAV','','Stereo WAV (*.wav)')
@@ -944,7 +1018,6 @@ class Window(QMainWindow):
         self.setStyleSheet(f'''
             QWidget {{ background:{p['bg']}; color:{p['fg']}; font-family:"JetBrains Mono"; font-size:12px; }}
             QLabel#brand {{ color:{p['accent']}; font-size:19px; font-weight:bold; }}
-            QLabel#brandText {{ color:{p['trace']}; font-family:"Courier","Courier New"; font-size:36px; font-weight:normal; }}
             QPushButton,QComboBox,QLineEdit,QAbstractSpinBox,QListWidget {{ background:{p['field']}; border:1px solid {p['border']}; padding:4px; }}
             QAbstractSpinBox::up-button,QAbstractSpinBox::down-button {{ subcontrol-origin:border; width:24px; background:{p['field']}; border-left:1px solid {p['border']}; }}
             QAbstractSpinBox::up-button {{ subcontrol-position:top right; }}
@@ -965,7 +1038,6 @@ class Window(QMainWindow):
             QScrollBar::handle:vertical {{ background:{p['border']}; min-height:25px; }}
         ''')
         artwork = str(logo_path(self.preferences['palette']))
-        self.brand_logo.setPixmap(QPixmap(artwork).scaled(64,64,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
         icon = QIcon(artwork)
         self.setWindowIcon(icon)
         QApplication.instance().setWindowIcon(icon)
@@ -975,7 +1047,7 @@ class Window(QMainWindow):
 
     def update_viewer_heading(self):
         sweep = self.system_monitor and self.sweep_mode
-        self.viewer_heading.setText('X(t), Y(t) SWEEP' if sweep else 'X–Y SIGNAL MONITOR')
+        self.viewer_heading.setText('X(t), Y(t) SWEEP' if sweep else 'X–Y FUNCTION PLOT' if self.function_monitor else 'RASTER CRT · 60 Hz' if self.video_monitor else 'X–Y SIGNAL MONITOR')
 
     def sweep_traces(self, scope):
         """Advance the sweep by newly captured samples; return its new beam paths.
@@ -994,12 +1066,14 @@ class Window(QMainWindow):
 
     def update_phosphor(self, new_frames, elapsed, traces=None):
         layer,scope,p = self.host.phosphor,self.host.scope,self.preferences
-        active = layer is not None and p['phosphor'] != PHOSPHOR_OFF
-        scope.draw_trace = not active
+        video = self.video_monitor and layer is not None and layer.video is not None
+        active = layer is not None and (p['phosphor'] != PHOSPHOR_OFF or video)
+        scope.draw_trace = not active and not self.video_monitor
         if layer is None: return
         layer.set_active(active)
+        layer.set_video(video,field_gain(elapsed),self.video_panel.scan_lines,LINE_WIDTH)
         if not active: return
-        count = new_sample_count(new_frames,INTERPOLATION_FACTORS[p['trace_interpolation']],len(scope.signal))
+        count = 0 if video else new_sample_count(new_frames,INTERPOLATION_FACTORS[p['trace_interpolation']],len(scope.signal))
         view = self.host.view
         core = gaussian_beam(p['trace_thickness'],view.devicePixelRatio(),p['beam_brightness'])[0] if p['beam_profile'] == BEAM_GAUSSIAN else p['trace_thickness']
         # Glow is bloom of the energy buffer, so it is no longer deposited as wide bands.
@@ -1009,10 +1083,13 @@ class Window(QMainWindow):
         else:
             vertices = deposit_vertices(scope.screen_points()[-count-1:],core,p['beam_brightness'],(),p['trace_thickness'],p['trace_thickness']) if count else np.empty(0,BEAM_VERTEX)
         ratio = view.devicePixelRatio()
-        profile = phosphor_profile(p['phosphor'],PALETTES[p['palette']]['trace'],p['phosphor_custom'])
+        # The line trace has no decay; video borrows the palette-colour phosphor instead.
+        name = PHOSPHOR_PALETTE if p['phosphor'] == PHOSPHOR_OFF else p['phosphor']
+        profile = phosphor_profile(name,PALETTES[p['palette']]['trace'],p['phosphor_custom'])
         layer.step(vertices,phosphor_uniforms(profile,elapsed,p['beam_intensity'])
                    |beam_uniforms(p['beam_profile'],p['trace_thickness'],ratio,view.width(),view.height(),p['beam_brightness'])
-                   |bloom_uniforms(p['crt_glow'],p['trace_thickness'],p['glow_size'],p['glow_intensity'],ratio,view.width(),view.height()))
+                   |bloom_uniforms(p['crt_glow'],p['trace_thickness'],p['glow_size'],p['glow_intensity'],ratio,view.width(),view.height())
+                   |dict(grain=p['phosphor_grain'],shimmer=p['phosphor_shimmer']))
 
     def spin_arrow_images(self, p):
         # Stylesheets cannot draw triangles, so write palette-coloured images for them.
@@ -1058,7 +1135,7 @@ class Window(QMainWindow):
             if text: layout.addWidget(text if isinstance(text,QLabel) else QLabel(text))
             layout.addWidget(widget)
         visual = {}; visual_labels = {}
-        for key,label in (('trace_thickness','Trace thickness (px)'),('glow_size','Glow size (px radius)'),('glow_intensity','Glow intensity (×)'),('glow_decay','Glow decay time (seconds, line trace only)'),('beam_brightness','Beam-speed brightness (0 = Classic even trace)'),('beam_intensity','Phosphor intensity (×)')):
+        for key,label in (('trace_thickness','Trace thickness (px)'),('glow_size','Glow size (px radius)'),('glow_intensity','Glow intensity (×)'),('glow_decay','Glow decay time (seconds, line trace only)'),('beam_brightness','Beam-speed brightness (0 = Classic even trace)'),('beam_intensity','Phosphor intensity (×)'),('phosphor_grain','Phosphor grain (0 = smooth)'),('phosphor_shimmer','Beam shimmer (0 = steady)')):
             visual_labels[key] = QLabel(label); layout.addWidget(visual_labels[key])
             slider = SliderInput(VISUAL_DEFAULTS[key],*VISUAL_RANGES[key],curve=key == 'beam_intensity'); slider.setObjectName(key)
             slider.setValue(baseline[key]); visual[key] = slider; layout.addWidget(slider)
@@ -1077,6 +1154,7 @@ class Window(QMainWindow):
             # Phosphor decay replaces the line trace's glow afterimage.
             line = name == PHOSPHOR_OFF
             visual['glow_decay'].setEnabled(line); visual_labels['glow_decay'].setEnabled(line)
+            for key in ('phosphor_grain','phosphor_shimmer'): visual[key].setEnabled(not line); visual_labels[key].setEnabled(not line)
         def current(): return dict(palette=palette.currentText(),show_grid=grid.isChecked(),grid_divisions=density.value(),crt_scanlines=scan.isChecked(),crt_glow=glow.isChecked(),trace_interpolation=interpolation.currentText(),phosphor=phosphor.currentText(),beam_profile=beam_profile.currentText(),phosphor_custom=dict(custom),**{key:slider.value for key,slider in visual.items()})
         def edited(profile):
             custom.clear(); custom.update(profile)
@@ -1113,7 +1191,7 @@ class Window(QMainWindow):
         tabs.setCurrentIndex(2 if troubleshooting else 1 if instructions else 0); dialog.exec()
 
     def pointer(self, kind, point):
-        if self.system_monitor or self.immersive: return False
+        if self.system_monitor or self.function_monitor or self.video_monitor or self.immersive: return False
         point = np.array([point.x(),point.y()])
         if kind == 'release': self.drag = None; return True
         if kind == 'press':
@@ -1250,6 +1328,16 @@ class Window(QMainWindow):
                 details = f'{c.device_name}\n{c.sample_rate} Hz · {c.channels} channel(s) · {c.frames} captured frames\nRaw input peak: {0. if waiting else c.peak:.4f}\nCapture status events: {c.status_events}' if c.device_name else ''
                 self.capture_status.setText(c.error or self.capture_notice or details)
                 self.status.setText(f'SYSTEM AUDIO · VISUALIZATION ONLY  |  {state}'+('  |  '+c.error if c.error else ''))
+            if self.video_monitor:
+                v = self.video
+                playing = v is not None and v.playing
+                self.play_button.setText('❚❚ PAUSE VIDEO' if playing else '▶ PLAY VIDEO')
+                if v is None or v.player.source().isEmpty(): state = 'No video loaded'
+                else:
+                    position, duration = v.player.position(), v.player.duration()
+                    size = v.size_text()
+                    state = ('Playing' if playing else 'Paused')+f'  |  {clock(position)} / {clock(duration)}'+(f'  |  {size}' if size else '')
+                self.status.setText(f'VIDEO · {self.video_panel.scan_lines}-LINE RASTER  |  {state}'+('  |  '+v.error if v is not None and v.error else ''))
         if self.isMinimized(): return
         start = time.perf_counter(); settings = self.output_settings()
         seconds = now-self.started
@@ -1271,12 +1359,16 @@ class Window(QMainWindow):
         else:
             signal = None
             self.last_playback_frame = None
+        if self.video_monitor:
+            signal = np.zeros((2,2))  # The raster replaces the beam path.
+            self.video_panel.refresh()
+        if self.function_monitor and signal is None:
+            # Stopped: show the function as playback would send it, clipped at ±1.
+            times = seconds+np.arange(round(.04*settings.sample_rate))/settings.sample_rate
+            signal = np.clip(self.function_signal(times,settings),-1,1)
         if signal is None:
             times = seconds+np.arange(round(.04*settings.sample_rate))/settings.sample_rate
             signal = select_signal(*render(times,settings),settings,self.scene.mode)
-        if self.time_trace.isVisible() and not self.immersive:
-            rate=self.capture.sample_rate if self.system_monitor else settings.sample_rate
-            self.time_trace.set_samples(signal,rate,PALETTES[self.preferences['palette']])
         scope = self.host.scope
         trace = interpolate_trace(signal,self.preferences['trace_interpolation'])
         scope.signal = trace*self.visualization_gain if self.system_monitor else trace
@@ -1287,11 +1379,11 @@ class Window(QMainWindow):
         phosphor_on = self.host.phosphor is not None and self.preferences['phosphor'] != PHOSPHOR_OFF
         scope.polylines = self.sweep.display_polylines(scope.width(),scope.height(),self.visualization_gain,self.sweep_separation) if sweeping and not phosphor_on else None
         scope.colors = PALETTES[self.preferences['palette']]
-        scope.glow = self.preferences['crt_glow']; scope.scanlines = self.preferences['crt_scanlines']; scope.divisions = self.preferences['grid_divisions']; scope.show_grid = self.preferences['show_grid']
+        scope.glow = self.preferences['crt_glow']; scope.scanlines = self.preferences['crt_scanlines'] and not self.video_monitor; scope.divisions = self.preferences['grid_divisions']; scope.show_grid = self.preferences['show_grid'] and not self.video_monitor
         for key in VISUAL_DEFAULTS: setattr(scope,key,self.preferences[key])
-        scope.history_key = (self.system_monitor,self.system_monitor and self.sweep_mode,self.scene.settings.source,self.scene.mode,self.capture.device_name)
+        scope.history_key = (self.system_monitor,self.function_monitor,self.video_monitor,self.system_monitor and self.sweep_mode,self.scene.settings.source,self.scene.mode,self.capture.device_name)
         self.update_phosphor(new_frames,elapsed,traces)
-        if self.system_monitor or self.immersive:
+        if self.system_monitor or self.function_monitor or self.video_monitor or self.immersive:
             scope.overlays = []; self.handles = []
         else: self.overlay(seconds,seconds+settings.motion_time_offset)
         scope.update()

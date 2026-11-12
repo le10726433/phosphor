@@ -104,7 +104,7 @@ class SceneTests(unittest.TestCase):
         scene = Scene()
         scene.add_model(model_from_obj(CUBE, 'crate')[0])
         document = scene_document(scene.settings, 'mixed', '')
-        self.assertEqual(document['version'],8)
+        self.assertEqual(document['version'],10)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'scene.json'
             atomic_json(path, document)
@@ -112,7 +112,7 @@ class SceneTests(unittest.TestCase):
 
     def test_scenes_without_models_keep_their_format(self):
         document = scene_document(Settings(), 'mixed', '')
-        self.assertEqual(document['version'],8)
+        self.assertEqual(document['version'],10)
         self.assertNotIn('model', document['shapes'][0])
 
     def test_import_adds_or_replaces(self):

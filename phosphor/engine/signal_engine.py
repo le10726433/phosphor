@@ -14,6 +14,7 @@ from phosphor.engine.custom_shape import Drawing, CUSTOM_OBJECT, compiled
 from phosphor.engine.model_object import MODEL_OBJECT, Model, model_route
 from phosphor.engine.motion_path import Motion,guide_route,sample_route
 from phosphor.engine.drawing_motion import render_components,segment_indices,validate_routes
+from phosphor.engine.route_plan import ROUTE_OFF, ROUTE_MODES, plan_route
 
 
 MAX_SPIN = 10.0
@@ -63,6 +64,7 @@ class Settings:
     rotation_z: float = 0.0
     motion_time_offset: float = 0.0 # runtime pose clock only, not musical time
     shape_redraw_count: int = 1
+    route_mode: str = ROUTE_OFF  # Machine signal preference, like corner dwell; not saved in scenes.
 
 
 def scene_shapes(settings):
@@ -170,7 +172,40 @@ def source_duration(settings):
     return score_duration(settings.bpm, settings.midi_file) if settings.source == MIDI_FILE_SOURCE else len(NOTES) * 60 / settings.bpm
 
 
-def shape_geometry(shape):
+def _original_route(kind, payload):
+    """(vertices, drawn edges, route, connector edges) as each shape type builds it."""
+    if kind == CUSTOM_OBJECT:
+        vertices, edges, route, travel = compiled(payload); joins = {tuple(t) for t in travel}
+        return vertices, [tuple(e) for e in edges if tuple(e) not in joins], route, np.array(travel, dtype=int).reshape(-1, 2)
+    if kind == TEXT_OBJECT:
+        vertices, edges, route, connectors = text_route(payload); joins = {tuple(c) for c in connectors}
+        return vertices, [tuple(e) for e in edges if tuple(e) not in joins], route, connectors
+    if kind == MODEL_OBJECT:
+        vertices, edges, route, connectors = model_route(payload); joins = {tuple(c) for c in np.asarray(connectors).reshape(-1, 2)}
+        return vertices, [tuple(e) for e in np.asarray(edges).reshape(-1, 2) if tuple(e) not in joins], route, np.asarray(connectors).reshape(-1, 2)
+    vertices, edges = geometry(payload)
+    return vertices, [tuple(e) for e in edges], route_for(payload), np.empty((0, 2), dtype=int)
+
+
+@lru_cache(maxsize=512)
+def planned_route(kind, payload, mode):
+    """(vertices, edges including jumps, route, jump edges) for a route mode."""
+    vertices, drawn, route, connectors = _original_route(kind, payload)
+    route, jumps = plan_route(vertices, drawn, route, mode, connectors)
+    edges = np.array([*drawn, *map(tuple, jumps)], dtype=int).reshape(-1, 2)
+    for array in (route, jumps, edges): array.setflags(write=False)
+    return vertices, edges, route, jumps
+
+
+def _route_key(shape):
+    if shape.solid == CUSTOM_OBJECT: return CUSTOM_OBJECT, shape.custom
+    if shape.solid == TEXT_OBJECT: return TEXT_OBJECT, getattr(shape, 'text', DEFAULT_TEXT)
+    if shape.solid == MODEL_OBJECT: return MODEL_OBJECT, shape.model
+    return 'solid', shape.solid
+
+
+def shape_geometry(shape, route_mode=ROUTE_OFF):
+    if route_mode != ROUTE_OFF: return planned_route(*_route_key(shape), route_mode)[:3]
     if shape.solid == CUSTOM_OBJECT: return compiled(shape.custom)[:3]
     if shape.solid == TEXT_OBJECT: return text_geometry(getattr(shape,'text',DEFAULT_TEXT))
     if shape.solid == MODEL_OBJECT: return model_route(shape.model)[:3]
@@ -178,8 +213,9 @@ def shape_geometry(shape):
     return vertices,edges,route_for(shape.solid)
 
 
-def shape_connectors(shape):
+def shape_connectors(shape, route_mode=ROUTE_OFF):
     """Part-tuple suffix naming edges that only join separate strokes or components."""
+    if route_mode != ROUTE_OFF: return (planned_route(*_route_key(shape), route_mode)[3],)
     if shape.solid == TEXT_OBJECT: return (text_route(getattr(shape,'text',DEFAULT_TEXT))[3],)
     if shape.solid == MODEL_OBJECT: return (model_route(shape.model)[3],)
     if shape.solid == CUSTOM_OBJECT: return (np.array(compiled(shape.custom)[3],dtype=int).reshape(-1,2),)
@@ -264,16 +300,16 @@ def world_motion_tangents(guide):
     tangents.setflags(write=False);return tangents
 
 @lru_cache(maxsize=256)
-def planned_path(frame, drawing_hz, shapes, mode, speed,motion_time_offset=0.,shape_redraw_count=1):
+def planned_path(frame, drawing_hz, shapes, mode, speed,motion_time_offset=0.,shape_redraw_count=1,route_mode=ROUTE_OFF):
     parts = []
     for shape in posed_shapes(shapes,max(0.,frame/drawing_hz+motion_time_offset)):
         if shape.solid==CUSTOM_OBJECT and (shape.custom.guides or shape.custom.attachments or (shape_redraw_count>1 and len(render_components(shape.custom))>1)):
-            parts.extend(builder_motion_parts(shape,frame/drawing_hz,max(0.,frame/drawing_hz+motion_time_offset)))
+            parts.extend(builder_motion_parts(shape,frame/drawing_hz,max(0.,frame/drawing_hz+motion_time_offset),route_mode))
             continue
         vertices = projected_solid(frame / drawing_hz, shape) * shape.shape_size
-        connectors = shape_connectors(shape)
-        parts.append((vertices, np.array([shape.position_x, shape.position_y]),
-                      shape_geometry(shape)[2], shape_geometry(shape)[1], *connectors))
+        connectors = shape_connectors(shape, route_mode)
+        _, edges, route = shape_geometry(shape, route_mode)
+        parts.append((vertices, np.array([shape.position_x, shape.position_y]), route, edges, *connectors))
     if not parts:return np.zeros((2,2)),np.zeros((2,2)),np.array([0.,1.])
     if shape_redraw_count>1 and len(parts)>1:
         if sum((len(route)-1)*shape_redraw_count+1 for _,_,route,*_ in parts)>32768:
@@ -296,9 +332,11 @@ def builder_guides(drawing):
 def builder_local_tangents(drawing):
     return world_motion_tangents(Shape(solid=CUSTOM_OBJECT,custom=drawing))
 
-def builder_motion_parts(shape,pose_seconds,motion_seconds):
+def builder_motion_parts(shape,pose_seconds,motion_seconds,route_mode=ROUTE_OFF):
     parts=[];parent_center=np.array([shape.position_x,shape.position_y]);guides=builder_guides(shape.custom);frames={};evaluated={}
     for vertices,edges,route,binding in render_components(shape.custom):
+        if route_mode!=ROUTE_OFF:
+            route=plan_route(vertices,[tuple(e) for e in edges],route,route_mode)[0]
         local=projected_solid(pose_seconds,shape,vertices=vertices)*shape.shape_size
         component_center=(local.min(axis=0)+local.max(axis=0))/2
         local=local-component_center;center=parent_center+component_center
@@ -337,7 +375,7 @@ def shape_audio(times, phase, envelope, settings, frequency=None):
     for frame in np.unique(frames):
         mask = frames == frame
         local, centers, cumulative = planned_path(int(frame), settings.drawing_hz, shapes,
-                                                 settings.travel_mode, settings.travel_speed,settings.motion_time_offset,settings.shape_redraw_count)
+                                                 settings.travel_mode, settings.travel_speed,settings.motion_time_offset,settings.shape_redraw_count,settings.route_mode)
         position=np.mod(phase[mask],1)
         if settings.corner_dwell_us>0:
             corners=corner_positions(local,centers,cumulative)
@@ -360,8 +398,9 @@ def validate_custom(drawing):
         for raw in builder_guides(drawing).values():builder_local_tangents(raw)
 
 def validate(settings):
+    if settings.route_mode not in ROUTE_MODES:raise ValueError('Select a route minimizing mode.')
     if type(settings.shape_redraw_count) is not int or not 1<=settings.shape_redraw_count<=32:raise ValueError('Shape redraw total draws must be an integer from 1 to 32.')
-    if not all(np.isfinite(value) for key, value in vars(settings).items() if key not in ('solid', 'source', 'midi_file', 'shapes', 'midi_preset', 'travel_mode')):
+    if not all(np.isfinite(value) for key, value in vars(settings).items() if key not in ('solid', 'source', 'midi_file', 'shapes', 'midi_preset', 'travel_mode', 'route_mode')):
         raise ValueError('All numeric settings must be finite.')
     if not 0<=settings.corner_dwell_us<=MAX_DWELL_US:
         raise ValueError(f'Corner dwell must be 0–{MAX_DWELL_US:g} microseconds.')

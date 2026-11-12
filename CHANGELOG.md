@@ -1,5 +1,31 @@
 # Application changes
 
+## 0.36.1 — Function plots, video input, builder text and route minimizing (November 11, 2026)
+
+- **Function plots:** Input › Monitor input › Function x(t), y(t) plays and draws two
+  expressions in Python maths syntax: t in seconds, s as the 0–1 cycle position at a
+  set frequency, and up to 8 variables with sliders. A maths-only whitelist means
+  scene and preset files cannot run code. Built-in presets, plus your own saved in
+  function-presets.json. This replaces the 40 ms X(t), Y(t) time traces.
+- **Video input:** Input › Monitor input › Video file (phosphor CRT) plays a video
+  with sound, drawn as a 60 Hz monochrome scanline raster through the phosphor
+  display, so the chosen phosphor's decay, beam profile and glow apply. Decoding uses
+  Qt Multimedia's FFmpeg backend, with seek, volume, loop and raster lines.
+- **Shape builder:** a Text tool places typed text as ordinary strokes. Per selected
+  shape, Bold width traces the outline of the strokes fattened to that width, and
+  Extrude depth adds front and back copies along Z joined at the corners.
+- **Route minimizing:** Preferences › Signal output › Route minimizing plans each
+  shape's beam route: Off (the original routes, sample-exact), Shortest jumps, or
+  Shortest total path (the default). A plan is used only if it is shorter. **Existing
+  scenes sound different unless it is set to Off.**
+- **Appearance:** Phosphor grain and Beam shimmer sliders (default 0, unchanged look).
+- **Layout:** the INPUT/SCENE/MIX controls sit to the right of the viewport. New
+  scenes start in Fully shaped audio.
+- **Files:** scene files are now version 10 and store the function plot and builder
+  styles; version 8 files from 0.32.6 still open. Shape files are version 5.
+- **Fixes:** an over-long number in a function no longer stops the app from
+  starting, and functions reject extra arguments.
+
 ## 0.32.6 — Bloom, decay editor, device-rate audio and X(t)/Y(t) sweep (November 10, 2026)
 
 - **Phosphor:** glow is now bloom of the energy buffer, continuous around sharp corners.

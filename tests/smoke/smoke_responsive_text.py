@@ -48,7 +48,7 @@ assert 'HELLO 2026!' in w.shape_list.currentItem().text()
 w.resize(1000,700);QTest.qWait(50)
 assert w.control_scrolls[1].verticalScrollBar().maximum()==0
 for width in (340,520):
-    w.resize(1220,840);w.splitter.setSizes([width,1200-width]);QTest.qWait(40)
+    w.resize(1220,840);w.splitter.setSizes([1200-width,width]);QTest.qWait(40)
     assert w.control_scrolls[1].horizontalScrollBar().maximum()==0
 w.tabs.setCurrentIndex(0);w.monitor.setCurrentIndex(1);w.monitor_changed(1);QTest.qWait(50)
 assert w.control_scrolls[0].horizontalScrollBar().maximum()==0

@@ -14,7 +14,7 @@ from phosphor.engine.signal_engine import Settings, Shape, render, scene_shapes
 class FileTests(unittest.TestCase):
     def test_earlier_scene_versions_are_rejected(self):
         document=scene_document(Settings(),'drawing','')
-        self.assertEqual(document['version'],8)
+        self.assertEqual(document['version'],10)
         self.assertNotIn('rotation_seconds',document['shapes'][0])
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'old.scene.json'

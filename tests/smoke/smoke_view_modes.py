@@ -76,30 +76,13 @@ with tempfile.TemporaryDirectory(dir=q.HERE/'.user') as folder:
         w.export();deadline=time.monotonic()+2
         while w.exporting and time.monotonic()<deadline:QTest.qWait(10);time.sleep(.001)
         assert not w.exporting and seen==[80.] and target.exists()
-w.resize(1000,700);w.splitter.setSizes([340,640]);w.tabs.setCurrentIndex(3);QTest.qWait(30);w.tick()
-assert w.time_trace.height()>=260 and w.time_trace.width()>200
-# The time plot stays raw; the viewport may add points but keeps every original sample.
-display_factor=q.INTERPOLATION_FACTORS[w.preferences['trace_interpolation']]
-assert len(w.host.scope.signal)==(len(w.time_trace.signal)-1)*display_factor+1 or display_factor==1
-np.testing.assert_allclose(w.time_trace.signal,w.host.scope.signal[::display_factor],atol=1e-6)
-w.monitor.setCurrentIndex(1);w.monitor_changed(1);w.tabs.setCurrentIndex(3)
-assert w.tabs.isTabEnabled(3)
+w.monitor.setCurrentIndex(1);w.monitor_changed(1)
+assert not w.tabs.isTabEnabled(3)
 raw=np.column_stack((.6*np.sin(np.arange(1920)*.04),.3*np.cos(np.arange(1920)*.07))).astype(np.float32)
 w.visualization_gain=4.
 with patch.object(w.capture,'samples',return_value=raw),patch.object(q,'render',side_effect=AssertionError('Capture must bypass shaping')):
     w.tick()
-    np.testing.assert_array_equal(w.time_trace.signal,raw)
     factor=q.INTERPOLATION_FACTORS[w.preferences['trace_interpolation']]
     np.testing.assert_array_equal(w.host.scope.signal[::factor],raw*4)
-w.time_trace.frozen=True
-with patch.object(w.capture,'samples',return_value=raw*.5):w.tick()
-np.testing.assert_array_equal(w.time_trace.signal,raw)
-w.time_trace.frozen=False
-w.capture.sample_rate=44100
-with patch.object(w.capture,'samples',return_value=raw[:1764]):w.tick()
-assert w.time_trace.sample_rate==44100 and len(w.time_trace.signal)==1764
-w.capture.sample_rate=48000
-with patch.object(w.capture,'samples',return_value=raw):
-    w.resize(1220,840);QTest.qWait(30);w.grab().save(str(q.HERE/'.user/time-traces.png'))
 w.timer.stop();w.shutdown_audio();w.force_close=True;w.close();app.processEvents()
-print('Fullscreen/Escape, immersive restoration, signal preferences/export and raw time traces passed.')
+print('Fullscreen/Escape, immersive restoration, signal preferences/export and raw capture passed.')

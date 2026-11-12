@@ -231,6 +231,8 @@ def decay_preview(profile, intensity, times):
     """Light after one beam pass, as phosphor_display.frag tone-maps it.
 
     Returns the flash and afterglow brightness and the displayed colour at each time.
+    Grain and shimmer are mean-1 noise across pixels and frames, so the preview shows
+    the average pixel and does not model them.
     """
     times = np.asarray(times, dtype=float)
     exposure = EXPOSURE*intensity

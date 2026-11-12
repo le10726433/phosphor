@@ -52,13 +52,13 @@ class CustomShapeTests(unittest.TestCase):
         pieces=np.concatenate([render(t,settings)[2] for t in np.array_split(times,47)])
         np.testing.assert_allclose(full,pieces,atol=1e-12)
         document=scene_document(settings,'drawing','')
-        self.assertEqual(document['version'],8)
+        self.assertEqual(document['version'],10)
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'custom.scene.json';atomic_json(path,document);loaded,_,_=read_scene(path)
         self.assertEqual(loaded.shapes,settings.shapes)
         # Hardware calibration is deliberately not in scene files.
         np.testing.assert_array_equal(render(times,replace(loaded,corner_dwell_us=80.))[2],full)
-        self.assertEqual(scene_document(Settings(),'mixed','')['version'],8)
+        self.assertEqual(scene_document(Settings(),'mixed','')['version'],10)
         self.assertNotIn('custom',scene_document(Settings(),'mixed','')['shapes'][0])
 
     def test_reject_bad_graphs_and_bound_geometry(self):

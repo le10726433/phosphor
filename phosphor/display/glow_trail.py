@@ -1,6 +1,6 @@
 """Bounded, time-based scheduling for GPU phosphor afterimages."""
-VISUAL_DEFAULTS = dict(trace_thickness=1., glow_size=3., glow_intensity=1., glow_decay=0., beam_brightness=1., beam_intensity=5.)
-VISUAL_RANGES = dict(trace_thickness=(.5,6.),glow_size=(0.,24.),glow_intensity=(0.,3.),glow_decay=(0.,2.),beam_brightness=(0.,1.),beam_intensity=(.1,64.))
+VISUAL_DEFAULTS = dict(trace_thickness=1., glow_size=3., glow_intensity=1., glow_decay=0., beam_brightness=1., beam_intensity=5., phosphor_grain=0., phosphor_shimmer=0.)
+VISUAL_RANGES = dict(trace_thickness=(.5,6.),glow_size=(0.,24.),glow_intensity=(0.,3.),glow_decay=(0.,2.),beam_brightness=(0.,1.),beam_intensity=(.1,64.),phosphor_grain=(0.,1.),phosphor_shimmer=(0.,1.))
 
 
 class GlowTrail:

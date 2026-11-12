@@ -34,8 +34,15 @@ Item {
     property vector2d energyTexel: Qt.vector2d(0, 0)
     property vector2d bloomTexelX: Qt.vector2d(0, 0)
     property vector2d bloomTexelY: Qt.vector2d(0, 0)
+    property real grain: 0
+    property real shimmer: 0
+    property real seed: 0
+    // Video: the raster ShaderEffect from VIDEO_QML replaces the beam geometry deposit.
+    property bool videoMode: false
+    property var rasterItem: null
     // Advance once per step: a live feedback layer renders at the display rate instead.
     function advance() {
+        seed = (seed + 1) % 509  // Small values keep the hash input precise.
         deposited.scheduleUpdate()
         if (gaussian) { blurredX.scheduleUpdate(); blurredY.scheduleUpdate() }
         energyCopy.scheduleUpdate(); energy.scheduleUpdate()
@@ -50,7 +57,8 @@ Item {
     // Both layers stay 8-bit: floating-point layers render empty in a multisampled
     // window. The accumulate and display shaders pack energy as 16-bit fixed point.
     ShaderEffectSource {
-        id: deposited; x: -40000; width: root.width; height: root.height; sourceItem: depositItem
+        id: deposited; x: -40000; width: root.width; height: root.height
+        sourceItem: root.videoMode && root.rasterItem ? root.rasterItem : depositItem
         hideSource: true; live: false; smooth: false
     }
     ShaderEffect {
@@ -85,6 +93,9 @@ Item {
         property real packedDeposit: root.gaussian ? 1 : 0
         property real fastKeep: root.fastKeep
         property real slowKeep: root.slowKeep
+        property real shimmer: root.shimmer
+        property real seed: root.seed
+        property vector2d viewSize: Qt.vector2d(root.width, root.height)
         fragmentShader: accumulateShader
     }
     // Feedback runs through a copy, not a recursive layer. Qt 6.10.3 frees a recursive
@@ -145,7 +156,46 @@ Item {
         property real slowGain: root.slowGain
         property vector3d fastColor: root.fastColor
         property vector3d slowColor: root.slowColor
+        property real grain: root.grain
+        property vector2d viewSize: Qt.vector2d(root.width, root.height)
         fragmentShader: displayShader
+    }
+}
+'''
+
+
+# Loaded only when video is first used, so the phosphor display never depends on
+# Qt Multimedia. Everything sits off-screen; the deposit layer captures the raster.
+VIDEO_QML = b'''
+import QtQuick
+import QtMultimedia
+Item {
+    id: holder
+    x: -40000
+    width: parent ? parent.width : 0
+    height: parent ? parent.height : 0
+    property real scanLines: 480
+    property real lineWidth: 0.32
+    property real gain: 0
+    // PySide cannot convert a ShaderEffect, so QML hands the raster to the layer itself.
+    onParentChanged: if (parent) parent.rasterItem = raster
+    function release() { frame.sourceItem = null }
+    VideoOutput {
+        id: videoOutput; objectName: "videoOutput"
+        width: holder.width; height: holder.height
+        fillMode: VideoOutput.PreserveAspectFit
+    }
+    ShaderEffectSource {
+        id: frame; x: -40000; width: holder.width; height: holder.height
+        sourceItem: videoOutput; hideSource: true; live: true; smooth: true
+    }
+    ShaderEffect {
+        id: raster; width: holder.width; height: holder.height; blending: false
+        property var video: frame
+        property real scanLines: holder.scanLines
+        property real lineWidth: holder.lineWidth
+        property real gain: holder.gain
+        fragmentShader: rasterShader
     }
 }
 '''
@@ -218,7 +268,32 @@ class PhosphorLayer:
         if self.root is None:
             raise RuntimeError('; '.join(error.toString() for error in self.component.errors()))
         self.root.setParentItem(view.contentItem())
+        self.video = None
         self.set_active(False)
+
+    def video_output(self):
+        """Create the video raster on first use; returns the QML VideoOutput for a QMediaPlayer."""
+        if self.video is None:
+            if not (SHADERS/'phosphor_raster.frag.qsb').is_file():
+                raise RuntimeError('Missing shader: phosphor_raster.frag.qsb')
+            self.engine.rootContext().setContextProperty('rasterShader', QUrl.fromLocalFile(str(SHADERS/'phosphor_raster.frag.qsb')))
+            component = QQmlComponent(self.engine)
+            component.setData(VIDEO_QML, QUrl.fromLocalFile(str(SHADERS/'phosphor_video.qml')))
+            video = component.create()
+            if video is None:
+                raise RuntimeError('Video display unavailable: '+'; '.join(error.toString() for error in component.errors()))
+            self.video_component = component
+            video.setParentItem(self.root)
+            self.video = video
+        return self.video.findChild(QQuickItem, 'videoOutput')
+
+    def set_video(self, enabled, gain=0., scan_lines=480, line_width=.32):
+        """Deposit the raster instead of beam geometry; gain is energy per step."""
+        enabled = enabled and self.video is not None
+        if self.root.property('videoMode') != enabled: self.root.setProperty('videoMode', enabled)
+        if self.video is not None:
+            for name, value in (('gain', float(gain) if enabled else 0.), ('scanLines', float(scan_lines)), ('lineWidth', float(line_width))):
+                self.video.setProperty(name, value)
 
     def resize(self, width, height):
         self.deposit.setWidth(width)
@@ -241,6 +316,7 @@ class PhosphorLayer:
 
     def close(self):
         """Drop the effect sources' window references; ~QQuickWindow cannot order them safely."""
+        if self.video is not None: QMetaObject.invokeMethod(self.video, 'release')
         QMetaObject.invokeMethod(self.root, 'releaseSources')
         self.root.setVisible(False)
         self.root.setParentItem(None)

@@ -6,6 +6,8 @@ import uuid
 import numpy as np
 from phosphor.engine.curve_geometry import curve_spans,arc_parameters,MAX_CURVE_POINTS
 from phosphor.engine.drawing_motion import Guide,Attachment,metadata_document,read_guides,read_attachments,validate_metadata,shifted_bindings,reconcile,unique_name
+from phosphor.engine.stroke_style import Style,validate_styles,bold_outline,corner_indices
+from phosphor.engine.vector_text import GLYPHS,validate_text
 
 CUSTOM_OBJECT = 'Custom shape'
 MAX_NODES, MAX_EDGES = 128, 256
@@ -32,6 +34,7 @@ class Drawing:
     motion_path: bool = False
     guides: tuple = ()
     attachments: tuple = ()
+    styles: tuple = ()  # Style: bold outline width / extrude depth per connected shape
 
     @property
     def playable(self):return bool(self.edges or self.curves)
@@ -78,6 +81,8 @@ class Drawing:
             if curve.kind=='Arc':arc_parameters([positions[i] for i in curve.nodes])
         if playable and not self.playable: raise ValueError('Draw at least one segment, then finish the stroke.')
         if self.guides or self.attachments:validate_metadata(self)
+        if not isinstance(self.styles,tuple):raise ValueError('Drawing snapshots must use immutable tuples.')
+        if self.styles:validate_styles(self)
         return self
 
     def document(self):
@@ -86,13 +91,15 @@ class Drawing:
         if self.motion_path:value['motion_path']=True
         if self.guides:value['guides']=metadata_document(self.guides)
         if self.attachments:value['attachments']=metadata_document(self.attachments)
+        if self.styles:value['styles']=[s.document() for s in self.styles]
         return value
 
     @classmethod
     def read(cls,value):
         try:
-            if not isinstance(value,dict) or not {'name','nodes','edges'}<=set(value)<={'name','nodes','edges','curves','motion_path','guides','attachments'}: raise ValueError('Unsupported custom shape data.')
-            return cls(value['name'],tuple(tuple(n) for n in value['nodes']),tuple(tuple(e) for e in value['edges']),tuple(Curve.read(c) for c in value.get('curves',())),value.get('motion_path',False),read_guides(value.get('guides',())),read_attachments(value.get('attachments',()))).validate()
+            if not isinstance(value,dict) or not {'name','nodes','edges'}<=set(value)<={'name','nodes','edges','curves','motion_path','guides','attachments','styles'}: raise ValueError('Unsupported custom shape data.')
+            if not isinstance(value.get('styles',[]),list):raise ValueError('Unsupported stroke style data.')
+            return cls(value['name'],tuple(tuple(n) for n in value['nodes']),tuple(tuple(e) for e in value['edges']),tuple(Curve.read(c) for c in value.get('curves',())),value.get('motion_path',False),read_guides(value.get('guides',())),read_attachments(value.get('attachments',())),tuple(Style.read(v) for v in value.get('styles',()))).validate()
         except (TypeError,KeyError) as error: raise ValueError('Malformed custom shape data.') from error
 
     def move(self,node,x,y,join=None):
@@ -151,6 +158,8 @@ class Drawing:
         result=Drawing(self.name,tuple(n for n in self.nodes if n[0] in used),
             tuple(e for k,e in enumerate(self.edges) if k in chosen),
             tuple(c for k,c in enumerate(self.curves,len(self.edges)) if k in chosen))
+        styles=tuple(replace(s,nodes=tuple(i for i in s.nodes if i in used)) for s in self.styles)
+        result=replace(result,styles=tuple(s for s in styles if s.nodes))
         if keep_motion:
             guides=tuple(g for g in self.guides if set(g.nodes)<=used);ids={g.id for g in guides}
             bindings=tuple(replace(b,nodes=tuple(i for i in b.nodes if i in used)) for b in self.attachments if b.guide_id in ids and used.intersection(b.nodes))
@@ -176,7 +185,8 @@ class Drawing:
             name=unique_name(g.name[:58]+' copy',names);names.add(name)
             guides.append(replace(g,id=guide_map[g.id],nodes=tuple(mapping[i] for i in g.nodes),name=name))
         bindings=tuple(replace(b,guide_id=guide_map[b.guide_id],nodes=tuple(mapping[i] for i in b.nodes),reference=tuple(float(x) for x in np.array(b.reference)+delta)) for b in other.attachments)
-        result=replace(result,guides=(*self.guides,*guides),attachments=(*self.attachments,*bindings))
+        result=replace(result,guides=(*self.guides,*guides),attachments=(*self.attachments,*bindings),
+            styles=(*self.styles,*(replace(s,nodes=tuple(mapping[i] for i in s.nodes if i in mapping)) for s in other.styles)))
         selected=frozenset((*range(len(self.edges),len(result.edges)),*range(len(result.edges)+len(self.curves),len(result.segments))))
         return result.validate(),selected
 
@@ -198,6 +208,102 @@ def paths(drawing):
         result.append(np.concatenate((spans[0],*(s[1:] for s in spans[1:]))))
     for p in result:p.setflags(write=False)
     return tuple(result)
+
+def text_drawing(text,height=.3,name=None):
+    """Text as ordinary builder strokes, centred on the origin, letters `height` tall.
+
+    Uses the app's own stroke alphabet (vector_text.GLYPHS, a 4x6 grid with 6-unit
+    advance). Points shared within a letter become one node, so its strokes join.
+    """
+    validate_text(text)
+    if not text.strip():raise ValueError('Type the text to place first.')
+    if not 0<height<=50:raise ValueError('Text size must be above 0 and at most 50.')
+    scale=height/6;nodes=[];edges=[];keys=set()
+    for column,char in enumerate(text.upper()):
+        if char==' ':continue
+        lookup={}
+        for stroke in GLYPHS[char].split('|'):
+            ids=[]
+            for pair in stroke.split():
+                point=(int(pair[0])+column*6,int(pair[1]))
+                if point not in lookup:lookup[point]=len(nodes);nodes.append((len(nodes),float(point[0]),float(point[1])))
+                ids.append(lookup[point])
+            for a,b in zip(ids,ids[1:]):
+                if a!=b and tuple(sorted((a,b))) not in keys:edges.append((a,b));keys.add(tuple(sorted((a,b))))
+    if len(nodes)>MAX_NODES:raise ValueError(f'That text needs {len(nodes)} nodes; a shape holds {MAX_NODES}. Use fewer characters.')
+    xs=[n[1] for n in nodes];ys=[n[2] for n in nodes];cx=(min(xs)+max(xs))/2;cy=(min(ys)+max(ys))/2
+    nodes=tuple((i,(x-cx)*scale,(y-cy)*scale) for i,x,y in nodes)
+    if max(max(abs(x),abs(y)) for _,x,y in nodes)>90:raise ValueError('That text is too large for the drawing area. Use a smaller size or fewer characters.')
+    return Drawing((name or text.strip())[:64],nodes,tuple(edges)).validate(playable=True)
+
+@lru_cache(maxsize=64)
+def bold_preview(drawing):
+    """(segment indices drawn as bold, 2D outline polylines) for the builder canvas."""
+    lines=paths(drawing);hidden=set();pieces=[]
+    for style in drawing.styles:
+        if not style.bold:continue
+        indices=[k for k,segment in enumerate(drawing.segments) if set(style.nodes).intersection(segment)]
+        hidden.update(indices);pieces.extend(bold_outline([lines[k] for k in indices],style.bold))
+    return frozenset(hidden),tuple(pieces)
+
+def _styled(drawing,vertices,edges,index):
+    """Apply bold outlines and Z extrusion to the styled shapes' part of the graph.
+
+    edges are built in drawing.segments order, so the edge's segment is recoverable:
+    plain lines first, then each curve's tessellated chain.
+    """
+    positions={i:(x,y) for i,x,y in drawing.nodes}
+    segment_of=list(range(len(drawing.edges)))
+    for k,curve in enumerate(drawing.curves,len(drawing.edges)):
+        spans=curve_spans(curve.kind,tuple(positions[i] for i in curve.nodes),curve.side)
+        segment_of.extend([k]*sum(len(p)-1 for p in spans))
+    lines=paths(drawing);vertices=[tuple(v) for v in vertices];edges=list(edges)
+    style_of_segment={}
+    for style in drawing.styles:
+        for k,segment in enumerate(drawing.segments):
+            if set(style.nodes).intersection(segment):style_of_segment[k]=style
+    tagged={}  # vertex -> style, for extrusion
+    keep=[]
+    for e,(a,b) in enumerate(edges):
+        style=style_of_segment.get(segment_of[e])
+        if style is not None and style.bold:continue  # Replaced by the outline below.
+        keep.append((a,b))
+        if style is not None:tagged[a]=tagged[b]=style
+    edges=keep;corners=set()
+    for style in drawing.styles:
+        if style.depth:corners.update(index[i] for i in style.nodes if i in index and not style.bold)
+        if not style.bold:continue
+        outline=bold_outline([lines[k] for k,s in style_of_segment.items() if s is style],style.bold)
+        ends=[];join=style.bold*.05  # Pieces cut at the same crossing (within the 2% inside tolerance) share one vertex.
+        def endpoint(point):
+            for v in ends:
+                if math.dist(vertices[v][:2],point)<join:return v
+            vertices.append((float(point[0]),float(point[1]),0.));ends.append(len(vertices)-1);return len(vertices)-1
+        for piece in outline:
+            closed=len(piece)>2 and np.linalg.norm(piece[0]-piece[-1])<1e-9
+            body=piece[:-1] if closed else piece
+            if closed:
+                first=len(vertices);vertices.extend((float(x),float(y),0.) for x,y in body);ids=list(range(first,len(vertices)))
+            else:
+                start=endpoint(body[0]);first=len(vertices)
+                vertices.extend((float(x),float(y),0.) for x,y in body[1:-1])
+                ids=[start,*range(first,len(vertices)),endpoint(body[-1])]
+            for v in ids:tagged[v]=style
+            edges.extend((a,b) for a,b in zip(ids,ids[1:]) if a!=b)
+            if closed:edges.append((ids[-1],ids[0]))
+            if style.depth:corners.update(ids[i] for i in corner_indices(piece) if i<len(ids))
+    if any(s.depth for s in drawing.styles):
+        # Front copy at +depth/2, back copy at -depth/2, joined at the shape's corners.
+        back={}
+        for v,style in tagged.items():
+            if not style.depth:continue
+            x,y,_=vertices[v];half=style.depth/2
+            vertices[v]=(x,y,half);back[v]=len(vertices);vertices.append((x,y,-half))
+        edges.extend((back[a],back[b]) for a,b in list(edges) if a in back and b in back)
+        edges.extend((v,back[v]) for v in sorted(corners) if v in back)
+    used=sorted({i for e in edges for i in e})
+    remap={v:k for k,v in enumerate(used)}
+    return [vertices[v] for v in used],[(remap[a],remap[b]) for a,b in edges]
 
 @lru_cache(maxsize=256)
 def compiled(drawing):
@@ -223,6 +329,7 @@ def compiled(drawing):
             for x,y in points[1:-1]:
                 current=len(vertices);vertices.append((x,y,0.));edges.append((previous,current));previous=current
             edges.append((previous,index[b]))
+    if drawing.styles:vertices,edges=_styled(drawing,vertices,edges,index)
     vertices=np.array(vertices,dtype=float)
     adjacency=[[] for _ in vertices]
     for k,(a,b) in enumerate(edges):adjacency[a].append((b,k));adjacency[b].append((a,k))

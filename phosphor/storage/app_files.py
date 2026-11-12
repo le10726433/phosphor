@@ -15,12 +15,16 @@ from phosphor.display.glow_trail import VISUAL_DEFAULTS, VISUAL_RANGES
 from phosphor.engine.custom_shape import Drawing, CUSTOM_OBJECT, compiled
 from phosphor.engine.model_object import MODEL_OBJECT, Model, model_route
 from phosphor.engine.motion_path import Motion
+from phosphor.engine.function_plot import FunctionPlot
 
 from phosphor.storage.app_paths import APP_DIR, USER_DIR
 PREFERENCES_PATH = USER_DIR / 'preferences.json'
 DEFAULT_PREFERENCES = dict(palette='Green monochrome', show_grid=True, grid_divisions=8, crt_scanlines=True, crt_glow=True, trace_interpolation='Off', phosphor=PHOSPHOR_P31, beam_profile=BEAM_GAUSSIAN, phosphor_custom=DEFAULT_CUSTOM_PROFILE, **VISUAL_DEFAULTS)
 # Version 8 removed seconds-per-revolution rotation; earlier versions are rejected.
-SCENE_VERSION = 8
+# Version 9 adds the x(t), y(t) function plot; version 8 files open with the default plot.
+# Version 10 allows bold/extrude styles on custom shapes.
+SCENE_VERSION = 10
+READABLE_SCENE_VERSIONS = (8, 9, 10)
 GLOBAL_FIELDS = ('sample_rate', 'source', 'drawing_hz', 'bpm', 'drawing_gain', 'music_gain',
                  'midi_preset', 'midi_channel', 'midi_gain', 'travel_mode', 'travel_speed')
 
@@ -41,7 +45,7 @@ def atomic_json(path, value):
             Path(temporary).unlink()
 
 
-def scene_document(settings, listening_mode, midi_device):
+def scene_document(settings, listening_mode, midi_device, function=None):
     validate(settings)
     if listening_mode not in ('mixed', 'drawing', 'music'):
         raise ValueError('Invalid listening mode.')
@@ -63,15 +67,16 @@ def scene_document(settings, listening_mode, midi_device):
     return dict(format='oscilloscope-music-scene', version=SCENE_VERSION,
                 settings=values,
                 shapes=[shape_document(shape) for shape in shapes],
-                listening_mode=listening_mode, midi_device=midi_device)
+                listening_mode=listening_mode, midi_device=midi_device,
+                function=(FunctionPlot() if function is None else function).document())
 
 
-def read_scene(path):
+def read_scene(path, with_function=False):
     data = json.loads(Path(path).read_text(encoding='utf-8'))
     if not isinstance(data, dict) or data.get('format') != 'oscilloscope-music-scene' or type(data.get('version')) is not int:
         raise ValueError('Unsupported scene format/version.')
-    if data['version'] != SCENE_VERSION:
-        raise ValueError(f'This scene is version {data["version"]}; this build opens only version {SCENE_VERSION} scenes. '
+    if data['version'] not in READABLE_SCENE_VERSIONS:
+        raise ValueError(f'This scene is version {data["version"]}; this build opens only version 8 to {SCENE_VERSION} scenes. '
                          'Earlier scene formats (with seconds-per-revolution rotation) are no longer supported.')
     if not isinstance(data.get('shapes'), list) or not data['shapes']:
         raise ValueError('Scene must contain at least one shape.')
@@ -105,7 +110,13 @@ def read_scene(path):
         raise ValueError(f'Invalid scene settings: {error}') from error
     if data.get('listening_mode') not in ('mixed', 'drawing', 'music') or not isinstance(data.get('midi_device'), str):
         raise ValueError('Invalid listening mode or MIDI input name.')
-    return settings, data['listening_mode'], data['midi_device']
+    if not with_function: return settings, data['listening_mode'], data['midi_device']
+    if data['version'] < 9: function = FunctionPlot()
+    elif 'function' not in data: raise ValueError('Version 9 scenes need a function plot.')
+    else:
+        try: function = FunctionPlot.read(data['function'])
+        except (TypeError, ValueError) as error: raise ValueError(f'Invalid function plot: {error}') from error
+    return settings, data['listening_mode'], data['midi_device'], function
 
 
 def validated_preferences(value):

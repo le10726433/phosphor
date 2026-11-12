@@ -66,7 +66,7 @@ class DrawingMotionTests(unittest.TestCase):
         pasted.validate();self.assertEqual(len(pasted.attachments),2)
         self.assertFalse(d.subset({1,2},keep_motion=True).attachments) # no dangling external guide in copied data
         settings=replace(Settings(),shapes=(Shape(solid=CUSTOM_OBJECT,custom=d),))
-        document=scene_document(settings,'drawing','');self.assertEqual(document['version'],8)
+        document=scene_document(settings,'drawing','');self.assertEqual(document['version'],10)
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'assembly.json';atomic_json(path,document);loaded,_,_=read_scene(path)
         self.assertEqual(loaded.shapes,settings.shapes)

@@ -7,6 +7,7 @@ from phosphor.audio.live_midi import mido_module
 from phosphor.audio.score_source import (SOURCES, MIDI_FILE_SOURCE, SCALE_NAME, file_tempo, source_duration, score_components,
                           score_arrays, melody_line, melody_arrays)
 from phosphor.engine.signal_engine import Settings, render, export_wav, validate, source_duration as settings_duration
+from phosphor.storage.app_files import SCENE_VERSION
 
 mido = mido_module()
 
@@ -95,7 +96,7 @@ class MidiFileSourceTests(unittest.TestCase):
         from phosphor.storage.app_files import read_scene, scene_document, atomic_json
         settings = Settings(source=MIDI_FILE_SOURCE, midi_file=self.path, bpm=90)
         document = scene_document(settings, 'mixed', '')
-        self.assertEqual((document['version'], document['settings']['midi_file']), (8, self.path))
+        self.assertEqual((document['version'], document['settings']['midi_file']), (SCENE_VERSION, self.path))
         self.assertNotIn('midi_file', scene_document(Settings(), 'mixed', '')['settings'])
         with tempfile.TemporaryDirectory() as moved:
             moved = Path(moved)

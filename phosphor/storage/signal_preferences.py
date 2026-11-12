@@ -3,15 +3,18 @@ import math
 import json
 from pathlib import Path
 from phosphor.engine.corner_dwell import MAX_DWELL_US
+from phosphor.engine.route_plan import ROUTE_MODES, SHORTEST_PATH
 
 from phosphor.storage.app_paths import USER_DIR
 SIGNAL_PREFERENCES_PATH = USER_DIR/'signal-preferences.json'
 MAX_REDRAWS=32
-DEFAULT_SIGNAL_PREFERENCES = dict(corner_dwell_us=0.,shape_redraw=False,shape_redraw_count=1)
+DEFAULT_SIGNAL_PREFERENCES = dict(corner_dwell_us=0.,shape_redraw=False,shape_redraw_count=1,route_mode=SHORTEST_PATH)
 
 
 def validated_signal_preferences(value):
     if isinstance(value,dict) and set(value)=={'corner_dwell_us'}:value=dict(DEFAULT_SIGNAL_PREFERENCES,**value)
+    # Files saved before route minimizing get its default (on).
+    if isinstance(value,dict) and set(value)=={'corner_dwell_us','shape_redraw','shape_redraw_count'}:value=dict(value,route_mode=SHORTEST_PATH)
     if not isinstance(value,dict) or set(value)!=set(DEFAULT_SIGNAL_PREFERENCES):
         raise ValueError('Unsupported signal-output preferences.')
     dwell=value['corner_dwell_us']
@@ -19,7 +22,8 @@ def validated_signal_preferences(value):
         raise ValueError(f'Corner dwell must be between 0 and {MAX_DWELL_US:g} microseconds.')
     if type(value['shape_redraw']) is not bool or type(value['shape_redraw_count']) is not int or not 1<=value['shape_redraw_count']<=MAX_REDRAWS:
         raise ValueError(f'Shape redraw needs an enabled/disabled checkbox and an integer from 1 to {MAX_REDRAWS}.')
-    return dict(corner_dwell_us=float(dwell),shape_redraw=value['shape_redraw'],shape_redraw_count=value['shape_redraw_count'])
+    if value['route_mode'] not in ROUTE_MODES:raise ValueError('Select a route minimizing mode.')
+    return dict(corner_dwell_us=float(dwell),shape_redraw=value['shape_redraw'],shape_redraw_count=value['shape_redraw_count'],route_mode=value['route_mode'])
 
 
 def read_signal_preferences(path=SIGNAL_PREFERENCES_PATH):

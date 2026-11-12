@@ -69,6 +69,8 @@ def validate_metadata(drawing):
 
 def reconcile(drawing):
     """Track edits by node identity, without depending on shifting segment indices."""
+    from phosphor.engine.stroke_style import reconcile_styles
+    drawing=reconcile_styles(drawing)
     if not drawing.guides and not drawing.attachments:return drawing
     expanded=tuple(replace(g,nodes=expand_nodes(drawing,g.nodes)) for g in drawing.guides if segment_indices(drawing,g.nodes))
     guides=[];remap={}

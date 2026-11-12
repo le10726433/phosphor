@@ -1,14 +1,15 @@
-VERSION = '0.32.6'
+VERSION = '0.36.1'
 PROJECT_DATE = 'November 6, 2026'
-BUILD_DATE = 'November 10, 2026'
+BUILD_DATE = 'November 11, 2026'
 TRANSPARENCY = ('Created by Mike Le with AI-assisted development using OpenAI Codex. '
                 'AI contributed to software design, code, tests, and documentation.')
-INSTRUCTIONS = '''Fullscreen, time traces and corner dwell
+INSTRUCTIONS = '''Fullscreen, function plots and corner dwell
 View > Fullscreen keeps the controls. View > Trace-only fullscreen hides controls,
 menus, status and editing overlays; Escape restores the previous view.
-The X(t), Y(t) tab shows both raw channels against time over the recent 40 ms.
-Freeze holds those plots without stopping playback or capture. Display gain and
-interpolation do not change these raw plots.
+Input > Monitor input > Function x(t), y(t) plays and draws two expressions from
+the X(t), Y(t) tab, using Python maths syntax: t is seconds, s is the 0-1 cycle
+position at the s frequency, and added variables get sliders. Output above +/-1 is
+clipped; MIX > Output level scales it. Scenes save the functions.
 Preferences > Signal output > Hardware corner dwell adjusts actual generated
 X/Y samples (0-500 microseconds per sharp turn, default 0). Source cycle timing
 is preserved by speeding edge travel; total dwell is capped at 25% of a cycle.

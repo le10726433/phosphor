@@ -32,6 +32,17 @@ with tempfile.TemporaryDirectory() as folder:
         QTest.mouseClick(buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults),Qt.MouseButton.LeftButton)
         assert w.output_settings().shape_redraw_count==1 and not w.signal_preferences['shape_redraw']
         d.reject();assert w.output_settings().shape_redraw_count==3
+        # Route minimizing: default Shortest total path; Off, Apply, Defaults and Cancel.
+        from phosphor.engine.route_plan import ROUTE_OFF,SHORTEST_JUMPS,SHORTEST_PATH
+        w.show_signal_preferences();d=w.signal_dialog;buttons=d.findChild(QDialogButtonBox);route=d.findChild(q.QComboBox,'route_mode')
+        assert route.currentText()==SHORTEST_PATH==w.output_settings().route_mode
+        route.setCurrentText(ROUTE_OFF);assert w.output_settings().route_mode==ROUTE_OFF==w.audio.parameters[0].route_mode
+        route.setCurrentText(SHORTEST_JUMPS)
+        QTest.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Apply),Qt.MouseButton.LeftButton)
+        assert q.read_signal_preferences(prefs)['route_mode']==SHORTEST_JUMPS and w.scene.document()==before
+        QTest.mouseClick(buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults),Qt.MouseButton.LeftButton)
+        assert route.currentText()==SHORTEST_PATH==w.output_settings().route_mode
+        d.reject();assert w.output_settings().route_mode==SHORTEST_JUMPS
 w.apply_signal_preferences(dict(corner_dwell_us=0.,shape_redraw=True,shape_redraw_count=32))
 complex=Drawing('Large circle',((0,0,0),(1,100,0)),(),(Curve('Circle',(0,1)),))
 large=q.Shape(solid=CUSTOM_OBJECT,custom=complex)

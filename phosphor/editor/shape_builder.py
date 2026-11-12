@@ -9,7 +9,9 @@ from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,
     QLineEdit,QCheckBox,QDoubleSpinBox,QComboBox,QFileDialog,QApplication,QMenu,QMessageBox)
 from PySide6.QtQuick import QQuickWindow,QSGNode
-from phosphor.engine.custom_shape import Drawing,Curve,compiled,paths,MAX_NODES,MAX_EDGES
+from phosphor.engine.custom_shape import Drawing,Curve,compiled,paths,text_drawing,bold_preview,MAX_NODES,MAX_EDGES,CUSTOM_OBJECT
+from phosphor.engine.stroke_style import set_style,style_of,MAX_BOLD,MAX_DEPTH
+from phosphor.engine.route_plan import ROUTE_OFF
 from phosphor.engine.curve_geometry import curve_spans
 from phosphor.display.qt_scope import GpuScope
 from phosphor.display.qt_geometry import stroke_triangles
@@ -114,7 +116,11 @@ class ConstructionCanvas(GpuScope):
         try:edges=[self.pixel(p) for p in paths(drawing)]
         except ValueError:edges=[]
         guide_indices={k for g in drawing.guides if g.enabled for k in segment_indices(drawing,g.nodes)}
-        self.upload(1,lines_mesh([p for k,p in enumerate(edges) if k not in guide_indices],DRAW_WIDTH),QColor(self.colors['trace']))
+        # Bold shapes show their outline as the trace; the editable centre line stays faint.
+        try:bold_indices,outline=bold_preview(drawing) if drawing.styles else (frozenset(),())
+        except ValueError:bold_indices,outline=frozenset(),()
+        traced=[p for k,p in enumerate(edges) if k not in guide_indices and k not in bold_indices]
+        self.upload(1,lines_mesh(traced+[self.pixel(p) for p in outline],DRAW_WIDTH),QColor(self.colors['trace']))
         squares=[];selected=[]
         group_nodes={i for k in e.selected_segments if k<len(drawing.segments) for i in drawing.segments[k]}
         for i,position in nodes.items():
@@ -136,7 +142,7 @@ class ConstructionCanvas(GpuScope):
         highlight_mesh=lines_mesh(highlights,3.5)
         if selected:highlight_mesh=np.concatenate((highlight_mesh,*selected))
         self.upload(3,highlight_mesh,QColor(self.colors['accent']))
-        ghost=[]
+        ghost=[edges[k] for k in bold_indices if k<len(edges)]
         for k in guide_indices:
             if k<len(edges):ghost.extend(dashed_lines(edges[k]))
         points=[n[1:] for n in e.pending]
@@ -153,7 +159,9 @@ class ConstructionCanvas(GpuScope):
             try:
                 visible=drawing.subset(set(range(len(drawing.segments)))-guide_indices) if guide_indices else drawing
                 if not visible.playable:raise ValueError('Only motion guides selected')
-                vertices,_,_,travel=compiled(visible)
+                # Dashes show the jumps of the route actually played (Signal output › Route minimizing).
+                from phosphor.engine.signal_engine import planned_route
+                vertices,_,_,travel=planned_route(CUSTOM_OBJECT,visible,e.route_mode)
                 for a,b in travel:
                     start=self.pixel(vertices[a,:2]);end=self.pixel(vertices[b,:2])
                     for t in np.arange(0,1,.08):ghost.append((start+(end-start)*t,start+(end-start)*min(1,t+.04)))
@@ -177,6 +185,7 @@ class ShapeBuilder(QWidget):
         self.motion_dialog=None
         self.drag_drawing=None;self.drag_origin=None;self._refreshing=False
         self.tool='Polyline'
+        self.route_mode=ROUTE_OFF  # Set by the window from the signal preference.
         outer=QVBoxLayout(self);outer.setContentsMargins(0,0,0,0);outer.setSpacing(8)
         bar=QHBoxLayout();outer.addLayout(bar)
         self.back_button=QPushButton('← Back to scene');self.back_button.clicked.connect(self.back);bar.addWidget(self.back_button)
@@ -187,7 +196,7 @@ class ShapeBuilder(QWidget):
         self.live.toggled.connect(self.audition_changed);bar.addWidget(self.live)
         self.apply_button=QPushButton('Apply to scene');self.apply_button.clicked.connect(self.apply);bar.addWidget(self.apply_button)
         tools=QHBoxLayout();outer.addLayout(tools);self.tools={}
-        for name in ('Select','Line','Polyline','Arc','Semicircle','Spline','Circle'):
+        for name in ('Select','Line','Polyline','Arc','Semicircle','Spline','Circle','Text'):
             button=QPushButton(name);button.setCheckable(True);button.clicked.connect(lambda checked=False,n=name:self.set_tool(n))
             self.tools[name]=button;tools.addWidget(button)
         tools.addStretch();fit=QPushButton('Fit');fit.clicked.connect(self.fit);tools.addWidget(fit)
@@ -198,6 +207,12 @@ class ShapeBuilder(QWidget):
         self.snap=QCheckBox('Snap + join');self.snap.setChecked(True);tools.addWidget(self.snap)
         self.motion_role=QCheckBox('Use as motion path');self.motion_role.toggled.connect(self.change_motion_role);tools.addWidget(self.motion_role)
         self.motion_role.setToolTip('Select one connected path to change its role. Other paths in this drawing keep their own roles.')
+        # Text tool: type, then click the canvas to place the letters as ordinary strokes.
+        self.text_panel=QWidget();text_row=QHBoxLayout(self.text_panel);text_row.setContentsMargins(0,0,0,0)
+        self.text_entry=QLineEdit();self.text_entry.setObjectName('builder_text');self.text_entry.setPlaceholderText('Text to place');self.text_entry.setMaxLength(64)
+        text_row.addWidget(self.text_entry,1);text_row.addWidget(QLabel('Size'))
+        self.text_size=QDoubleSpinBox();self.text_size.setObjectName('builder_text_size');self.text_size.setRange(.01,50);self.text_size.setDecimals(3);self.text_size.setSingleStep(.05);self.text_size.setValue(.3)
+        text_row.addWidget(self.text_size);tools.addWidget(self.text_panel,1);self.text_panel.hide()
         tools.addStretch()
         body=QHBoxLayout();outer.addLayout(body,1)
         self.view=QQuickWindow();self.canvas=ConstructionCanvas(self.view.contentItem(),self)
@@ -206,16 +221,29 @@ class ShapeBuilder(QWidget):
         self.view.widthChanged.connect(self.resize_canvas);self.view.heightChanged.connect(self.resize_canvas)
         panel=QWidget();panel.setFixedWidth(245);right=QVBoxLayout(panel);right.setContentsMargins(0,0,0,0);body.addWidget(panel)
         self.selection=QLabel('Click a node to edit');self.selection.setWordWrap(True);right.addWidget(self.selection)
+        # Node controls hide while whole shapes are selected, when the style rows show instead.
+        self.node_panel=QWidget();node_rows=QVBoxLayout(self.node_panel);node_rows.setContentsMargins(0,0,0,0);right.addWidget(self.node_panel)
         self.coordinates=[]
         for axis in ('X','Y'):
             row=QHBoxLayout();row.addWidget(QLabel(axis));spin=QDoubleSpinBox();spin.setRange(-100,100);spin.setDecimals(4);spin.setSingleStep(.05)
-            spin.editingFinished.connect(self.numeric_move);row.addWidget(spin);right.addLayout(row);self.coordinates.append(spin)
-        self.incident=QComboBox();right.addWidget(self.incident)
+            spin.editingFinished.connect(self.numeric_move);row.addWidget(spin);node_rows.addLayout(row);self.coordinates.append(spin)
+        self.incident=QComboBox();node_rows.addWidget(self.incident)
         self.radius_panel=QWidget();radius_row=QHBoxLayout(self.radius_panel);radius_row.setContentsMargins(0,0,0,0)
         radius_row.addWidget(QLabel('Radius'));self.radius=QDoubleSpinBox();self.radius.setRange(.0001,100);self.radius.setDecimals(4)
         self.radius.editingFinished.connect(self.edit_radius);radius_row.addWidget(self.radius);right.addWidget(self.radius_panel)
-        self.detach_button=QPushButton('Detach selected segment');self.detach_button.clicked.connect(self.detach);right.addWidget(self.detach_button)
+        self.detach_button=QPushButton('Detach selected segment');self.detach_button.clicked.connect(self.detach);node_rows.addWidget(self.detach_button)
         self.flip_button=QPushButton('Flip side');self.flip_button.clicked.connect(self.flip);right.addWidget(self.flip_button)
+        # Bold outline width and Z extrusion depth for the selected connected shapes. The rows
+        # show only with a selection, so the panel still fits 1000x700 without a scrollbar.
+        self.style_panel=QWidget();style_rows=QVBoxLayout(self.style_panel);style_rows.setContentsMargins(0,0,0,0)
+        self.style_spins={}
+        for key,label,high,step,tip in (('bold','Bold width',MAX_BOLD,.01,'Trace the outline of the strokes fattened to this width. Off = plain lines.'),
+                                        ('depth','Extrude depth',MAX_DEPTH,.05,'Front and back copies this far apart along Z, joined at corners. Spin or tilt the shape in Transform to see the depth.')):
+            row=QHBoxLayout();caption=QLabel(label);caption.setToolTip(tip);row.addWidget(caption)
+            spin=QDoubleSpinBox();spin.setObjectName('style_'+key);spin.setRange(0,high);spin.setDecimals(3);spin.setSingleStep(step)
+            spin.setSpecialValueText('Off');spin.setToolTip(tip);spin.editingFinished.connect(lambda key=key:self.edit_style(key))
+            row.addWidget(spin);style_rows.addLayout(row);self.style_spins[key]=spin
+        right.addWidget(self.style_panel)
         actions=QHBoxLayout();right.addLayout(actions)
         self.delete_button=QPushButton('Delete');self.delete_button.clicked.connect(self.delete_selection);actions.addWidget(self.delete_button)
         self.assign_button=QPushButton('Assign motion…');self.assign_button.clicked.connect(self.show_motion);actions.addWidget(self.assign_button)
@@ -224,7 +252,9 @@ class ShapeBuilder(QWidget):
         save=QPushButton('Save shape…');save.clicked.connect(self.save_shape);files.addWidget(save)
         load=QPushButton('Load shape…');load.clicked.connect(self.load_shape);files.addWidget(load)
         right.addWidget(QLabel('SCENE OUTPUT'))
-        self.preview=view_host();self.preview.setMinimumHeight(150);self.preview.setMaximumHeight(220);right.addWidget(self.preview,1)
+        # The preview gives up height first so the controls and status keep theirs at 1000x700;
+        # its old 150 px minimum was never met there and only squeezed the status lines.
+        self.preview=view_host();self.preview.setMinimumHeight(60);self.preview.setMaximumHeight(220);right.addWidget(self.preview,1)
         self.play_button=QPushButton('▶ PLAY AUDIO');right.addWidget(self.play_button)
         self.info=QLabel();self.info.setWordWrap(True);right.addWidget(self.info)
         help=QLabel('Select: drag defining points · Delete removes · Option/Alt bypasses snapping\nScroll to zoom · middle-drag to pan · Fit frames the drawing\nOpen strokes retrace; dotted links are visible stereo travel.')
@@ -296,13 +326,21 @@ class ShapeBuilder(QWidget):
         self.detach_button.setEnabled(self.incident.count()>1)
         self.flip_button.setEnabled(self.selected_edge is not None and selected_kind=='Semicircle' and self.selected is None)
         self.delete_button.setEnabled(self.selected is not None or bool(self.selected_segments))
+        style=style_of(self.drawing,self.selected_segments) if self.selected_segments else None
+        self.style_panel.setVisible(bool(self.selected_segments))
+        self.node_panel.setVisible(self.selected is not None or not self.selected_segments)
+        for key,spin in self.style_spins.items():
+            spin.setEnabled(bool(self.selected_segments) and not self.pending)
+            blocker=QSignalBlocker(spin);spin.setValue(getattr(style,key) if style is not None else 0.)
+        self.text_panel.setVisible(self.tool=='Text')
         self.info.setText(f'{len(self.drawing.nodes)}/{MAX_NODES} nodes · {len(self.drawing.segments)}/{MAX_EDGES} segments\n'+('Live audition on' if self.live.isChecked() else 'Live audition off · Apply to hear edits'))
         hints={'Select':'Drag a stroke to move its connected shape. Drag empty space to box-select. Right-click for Copy/Cut/Paste. Shift constrains movement.',
             'Line':'Click the two endpoints.','Polyline':'Click points · Enter finishes · click the first point to close.',
             'Arc':'Arc: click start → point on curve → end. Next: '+('start','point on curve','end')[min(2,len(self.pending))]+'.',
             'Semicircle':'Click the two diameter endpoints. Select the semicircle and use Flip side to reverse its bulge.',
             'Circle':'Click the center, then a point on the circumference. Select the circle to edit its radius.',
-            'Spline':'Click the points the smooth curve passes through. Enter finishes; click the first point to close.'}
+            'Spline':'Click the points the smooth curve passes through. Enter finishes; click the first point to close.',
+            'Text':'Type text and set its size, then click to place it. Letters become ordinary strokes: select them to move, bold or extrude.'}
         self.hint.setText(hints[self.tool])
         if self.tool=='Select' and matching and any(i not in {n for g in matching for n in g.nodes} for i in nodes):
             self.hint.setText('Select follower shapes without their motion guide to assign motion. Shift-click adds shapes; a box selects whole connected shapes.')
@@ -413,6 +451,7 @@ class ShapeBuilder(QWidget):
                     self.box_base=self.selected_segments if modifiers & Qt.KeyboardModifier.ShiftModifier else frozenset()
                     self.selected_segments=self.box_base;self.box=(p.copy(),p.copy())
             self.refresh();return
+        if self.tool=='Text':self.place_text(self.canvas.world(p));return
         node,position=self.point(p,modifiers,anchor=self.pending[-1][1:] if self.pending else None)
         if node is None:
             if len({n[0] for n in (*self.drawing.nodes,*self.pending)})>=MAX_NODES:
@@ -482,6 +521,25 @@ class ShapeBuilder(QWidget):
             self.selected_segments=self.drawing.connected((self.selected_edge,)) if self.selected_edge is not None else frozenset()
             self.refresh();return True
         self.pending=pending;self.refresh();return False
+
+    def place_text(self,position):
+        """Add the typed text, centred on position, as a new selected group of strokes."""
+        try:
+            letters=text_drawing(self.text_entry.text(),self.text_size.value())
+            result,selection=self.drawing.paste(letters,np.asarray(position,dtype=float))
+        except ValueError as error:self.notice.setText(str(error));return False
+        if self.commit(result):
+            self.selected=None;self.selected_edge=None;self.selected_segments=selection;self.refresh()
+            self.notice.setText('Placed text as strokes. Select it to move, bold or extrude.');return True
+        return False
+
+    def edit_style(self,key):
+        if self._refreshing or not self.selected_segments:return
+        value=self.style_spins[key].value()
+        try:drawing=set_style(self.drawing,self.selected_segments,**{key:value})
+        except ValueError as error:self.notice.setText(str(error));self.refresh();return
+        selection=self.selected_segments
+        if self.commit(drawing):self.selected_segments=selection;self.refresh()
 
     def cancel_gesture(self):
         if self.box is not None:self.selected_segments=self.box_base
@@ -594,7 +652,7 @@ class ShapeBuilder(QWidget):
         path,_=QFileDialog.getSaveFileName(self,'Save reusable shape',self.drawing.name+'.shape.json','Shape JSON (*.json)')
         if not path:return
         if not path.lower().endswith('.json'):path+='.shape.json'
-        try:atomic_json(path,dict(format='phosphor-line-shape',version=4 if self.drawing.guides or self.drawing.attachments else 3 if self.drawing.motion_path or any(c.kind=='Circle' for c in self.drawing.curves) else 2 if self.drawing.curves else 1,drawing=self.drawing.document()))
+        try:atomic_json(path,dict(format='phosphor-line-shape',version=5 if self.drawing.styles else 4 if self.drawing.guides or self.drawing.attachments else 3 if self.drawing.motion_path or any(c.kind=='Circle' for c in self.drawing.curves) else 2 if self.drawing.curves else 1,drawing=self.drawing.document()))
         except (OSError,ValueError) as error:self.notice.setText(str(error))
 
     def load_shape(self):
@@ -603,7 +661,7 @@ class ShapeBuilder(QWidget):
         try:
             if Path(path).stat().st_size>200000:raise ValueError('Shape file is too large.')
             value=json.loads(Path(path).read_text())
-            if value.get('format')!='phosphor-line-shape' or type(value.get('version')) is not int or value.get('version') not in (1,2,3,4):raise ValueError('Unsupported shape file.')
+            if value.get('format')!='phosphor-line-shape' or type(value.get('version')) is not int or value.get('version') not in (1,2,3,4,5):raise ValueError('Unsupported shape file.')
             drawing=Drawing.read(value['drawing'])
             self.cancel_gesture();self.selected=None;self.selected_edge=None;self.selected_segments=frozenset()
             if self.commit(drawing):self.fit()

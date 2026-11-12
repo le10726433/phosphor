@@ -70,7 +70,7 @@ class CurveTests(unittest.TestCase):
         drawing=Drawing('Mixed',nodes,((0,3),),(Curve('Arc',(0,1,2)),Curve('Semicircle',(2,3),-1),Curve('Spline',(3,1,2))))
         settings=replace(Settings(),shapes=(Shape(solid=CUSTOM_OBJECT,custom=drawing),),corner_dwell_us=40.)
         document=scene_document(settings,'drawing','')
-        self.assertEqual(document['version'],8)
+        self.assertEqual(document['version'],10)
         self.assertEqual(Drawing.read(drawing.document()),drawing)
         with tempfile.TemporaryDirectory() as folder:
             p=Path(folder)/'curves.scene.json';atomic_json(p,document);loaded,_,_=read_scene(p)

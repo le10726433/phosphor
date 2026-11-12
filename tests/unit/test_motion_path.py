@@ -63,7 +63,7 @@ class MotionTests(unittest.TestCase):
         full=render(times,settings)[2]
         chunks=np.concatenate([render(t,settings)[2] for t in np.array_split(times,43)])
         np.testing.assert_allclose(chunks,full,atol=1e-12)
-        document=scene_document(settings,'drawing','');self.assertEqual(document['version'],8)
+        document=scene_document(settings,'drawing','');self.assertEqual(document['version'],10)
         with tempfile.TemporaryDirectory() as folder:
             p=Path(folder)/'motion.json';atomic_json(p,document);loaded,_,_=read_scene(p)
         self.assertEqual(loaded.shapes,settings.shapes);np.testing.assert_array_equal(render(times,loaded)[2],full)
