@@ -25,7 +25,9 @@ PROFILE_COLORS = ('flash_color', 'afterglow_color')
 BEAM_HARD = 'Hard edge'
 BEAM_GAUSSIAN = 'Gaussian'
 BEAM_PROFILES = (BEAM_HARD, BEAM_GAUSSIAN)
-MIN_SIGMA, MAX_SIGMA = 1., 8.  # Physical pixels; below 1 the thin core's aliasing shows.
+REFERENCE_SIDE = 720.
+REFERENCE_FRAME = 1/60
+MIN_SIGMA, MAX_SIGMA = 1., 24.  # Physical pixels; below 1 the thin core's aliasing shows.
 FWHM_TO_SIGMA = 1/(2*math.sqrt(2*math.log(2)))
 ENERGY_SCALE = 150.
 STATIONARY_LENGTH = .05  # Screen pixels per segment; shorter slivers cover no pixel centre.
@@ -38,6 +40,11 @@ SLOW_REFERENCE = .05
 MAX_PENDING_VERTICES = 300000
 
 
+def view_scale(width, height):
+    """Scope logical pixels per reference pixel, independent of device pixel ratio."""
+    return max(min(width, height), 1.)/REFERENCE_SIDE
+
+
 def new_sample_count(frames, factor, available):
     """Display points to deposit this frame, so overlapping windows are not counted twice."""
     if frames <= 0 or available < 2:
@@ -45,13 +52,13 @@ def new_sample_count(frames, factor, available):
     return min(available-1, int(round(frames*factor)))
 
 
-def spot_deposit(points, lengths, width, level):
+def spot_deposit(points, lengths, width, level, *, view_scale=1.):
     """Round spots for segments too short to rasterize; held samples merge and add energy."""
     held = lengths < STATIONARY_LENGTH
     if width <= 0 or not held.any():
         return np.empty(0, dtype=BEAM_VERTEX)
     # A slowly drifting beam starts a new spot each half width instead of smearing one.
-    travel = np.floor(np.cumsum(lengths)/(width/2))
+    travel = np.floor(np.cumsum(lengths/view_scale)/(width/view_scale/2))
     first = held & np.concatenate(([True], ~held[:-1] | (travel[1:] != travel[:-1])))
     starts = np.flatnonzero(first)
     # Moving segments between groups end a group, so only held segments are counted.
@@ -59,7 +66,7 @@ def spot_deposit(points, lengths, width, level):
     members = held & (group >= 0)
     counts = np.bincount(group[members], minlength=len(starts))
     centers = np.column_stack([np.bincount(group[members], points[:-1][members, axis], len(starts)) for axis in (0, 1)])/counts[:, None]
-    per_sample = ENERGY_SCALE/max(width, .5)
+    per_sample = ENERGY_SCALE/max(width/view_scale, .5)
     levels = np.clip(np.rint(level*per_sample*counts), 0, 255)
     keep = levels > 0
     centers, levels = centers[keep], levels[keep]
@@ -75,12 +82,13 @@ def spot_deposit(points, lengths, width, level):
 BLANKED_LENGTH = 1e6  # Stands in for a blanked segment's length, so it is never a held spot.
 
 
-def stroke_deposit(points, width, scale, strength, spot_width=None, energy_width=None, drawn=None):
+def stroke_deposit(points, width, scale, strength, spot_width=None, energy_width=None, drawn=None, *, view_scale=1.):
     """Stroke whose colour is energy in R and G; zero alpha makes the blend additive.
 
     energy_width lets a narrow stroke carry the energy of a wider one, as the
     Gaussian core does for the trace thickness it is blurred out to. drawn, one flag
     per segment, blanks the beam on the others (a sweep's retrace).
+    Points and widths are logical pixels; levels use reference pixels via view_scale.
     """
     energy_width = width if energy_width is None else energy_width
     points = np.asarray(points, dtype=np.float32)
@@ -88,7 +96,7 @@ def stroke_deposit(points, width, scale, strength, spot_width=None, energy_width
         return np.empty(0, dtype=BEAM_VERTEX)
     every_length = np.linalg.norm(points[1:]-points[:-1], axis=1)
     drawn = np.ones(len(every_length), dtype=bool) if drawn is None else np.asarray(drawn, dtype=bool)
-    spots = spot_deposit(points, np.where(drawn, every_length, BLANKED_LENGTH), width if spot_width is None else spot_width, scale)
+    spots = spot_deposit(points, np.where(drawn, every_length, BLANKED_LENGTH), width if spot_width is None else spot_width, scale, view_scale=view_scale)
     vertices = stroke_triangles(points, width)
     if not len(vertices):
         return spots
@@ -96,7 +104,7 @@ def stroke_deposit(points, width, scale, strength, spot_width=None, energy_width
     lengths = every_length[every_length > 1e-6]
     moving = np.repeat(lengths >= STATIONARY_LENGTH, 6)
     # A sample's energy spreads over its footprint, so overlapping wide strokes sum to 1/speed.
-    lengths = np.maximum(lengths, max(energy_width, .5))
+    lengths = np.maximum(lengths/view_scale, max(energy_width/view_scale, .5))
     levels = scale*ENERGY_SCALE/lengths**strength*(energy_width/width)
     levels = np.repeat(np.clip(np.rint(levels), 0, 255), 6)
     keep = (levels > 0) & moving & np.repeat(visible, 6)
@@ -107,10 +115,10 @@ def stroke_deposit(points, width, scale, strength, spot_width=None, energy_width
     return np.concatenate((result, spots))
 
 
-def deposit_vertices(points, width, strength, glow_bands=(), spot_width=None, energy_width=None, drawn=None):
+def deposit_vertices(points, width, strength, glow_bands=(), spot_width=None, energy_width=None, drawn=None, *, view_scale=1.):
     """Core plus lower-energy glow bands, all following the same beam-speed strength."""
-    parts = [stroke_deposit(points, band, scale, strength, drawn=drawn) for band, scale in glow_bands]
-    parts.append(stroke_deposit(points, width, 1., strength, spot_width, energy_width, drawn))
+    parts = [stroke_deposit(points, band, scale, strength, drawn=drawn, view_scale=view_scale) for band, scale in glow_bands]
+    parts.append(stroke_deposit(points, width, 1., strength, spot_width, energy_width, drawn, view_scale=view_scale))
     return np.concatenate(parts)
 
 
@@ -118,10 +126,12 @@ def hex_color(value):
     return tuple(int(value[index:index+2], 16)/255 for index in (1, 3, 5))
 
 
-def gaussian_beam(thickness, pixel_ratio, strength=1.):
+def gaussian_beam(thickness, pixel_ratio, strength=1., *, view_scale=1.):
     """Core width (logical px) and blur sigma (physical px).
 
-    Trace thickness is the beam's full width at half maximum. The core is drawn thin
+    Thickness is already scaled to logical pixels; view_scale converts the core's
+    energy calculation back to reference pixels. Trace thickness is the beam's full
+    width at half maximum. The core is drawn thin
     and carries the energy of the full thickness (stroke_deposit's energy_width), and
     the blur preserves it, so Gaussian matches Hard edge at any beam speed or
     beam-speed brightness. The core widens where its level would pass 8 bits, and the
@@ -129,18 +139,19 @@ def gaussian_beam(thickness, pixel_ratio, strength=1.):
     """
     target = min(MAX_SIGMA, max(MIN_SIGMA, thickness*pixel_ratio*FWHM_TO_SIGMA))
     # The slowest beam has the highest level: ENERGY_SCALE/max(thickness, .5)**strength.
-    unclipped = thickness*ENERGY_SCALE/(255*max(thickness, .5)**strength)
-    core = min(thickness, max(min(thickness, 1.), unclipped))
+    reference = thickness/view_scale
+    unclipped = reference*ENERGY_SCALE/(255*max(reference, .5)**strength)*view_scale
+    core = min(thickness, max(min(thickness, view_scale), unclipped))
     # A box of width w adds w**2/12 to the variance of the profile.
     sigma = max(MIN_SIGMA, math.sqrt(max(0., target**2-(core*pixel_ratio)**2/12)))
     return core, sigma
 
 
-def beam_uniforms(profile, thickness, pixel_ratio, width, height, strength=1.):
+def beam_uniforms(profile, thickness, pixel_ratio, width, height, strength=1., *, view_scale=1.):
     """Shader inputs for the beam profile; a hard edge bypasses the blur passes."""
     if profile != BEAM_GAUSSIAN or width <= 0 or height <= 0:
         return dict(gaussian=False, depositGain=1.)
-    _, sigma = gaussian_beam(thickness, pixel_ratio, strength)
+    _, sigma = gaussian_beam(thickness, pixel_ratio, strength, view_scale=view_scale)
     return dict(gaussian=True, sigma=sigma, depositGain=1.,
                 texelX=(1/(width*pixel_ratio), 0.), texelY=(0., 1/(height*pixel_ratio)))
 
@@ -158,19 +169,21 @@ def bloom_gain(thickness, sigma, intensity):
     return intensity*BLOOM_PEAK*math.sqrt(2*math.pi)*sigma/max(thickness, .1)
 
 
-def bloom_uniforms(enabled, thickness, glow_size, intensity, pixel_ratio, width, height):
+def bloom_uniforms(enabled, thickness, glow_size, intensity, pixel_ratio, width, height, *, view_scale=1.):
     """Shader inputs for glow drawn as bloom of the energy buffer, or bloom switched off.
 
     The blur runs on a texture downsampled by bloomFactor, chosen so the low-resolution
     sigma stays a few texels: wide glow costs about the same as narrow glow.
+    Thickness and glow_size are already scaled logical pixels. Compute gain in
+    reference units too, so its thickness floor cannot dim small scopes.
     """
     if not enabled or intensity <= 0 or glow_size <= 0 or width <= 0 or height <= 0:
         return dict(bloomOn=False, bloomGain=0.)
     sigma = max(.5, glow_size*BLOOM_SIGMA*pixel_ratio)
-    factor = 1 if sigma < 3 else 2 if sigma < 8 else 4 if sigma < 24 else 8
+    factor = 1 if sigma < 3 else 2 if sigma < 8 else 4 if sigma < 24 else 8 if sigma < 48 else 16 if sigma < 96 else 32
     pixels = (max(1, round(width*pixel_ratio)), max(1, round(height*pixel_ratio)))
     size = tuple(max(1, math.ceil(extent/factor)) for extent in pixels)
-    return dict(bloomOn=True, bloomGain=bloom_gain(thickness*pixel_ratio, sigma, intensity),
+    return dict(bloomOn=True, bloomGain=bloom_gain(thickness*pixel_ratio/view_scale, sigma/view_scale, intensity),
                 bloomSigma=sigma/factor, bloomFactor=float(factor), bloomSize=size,
                 energyTexel=(1/pixels[0], 1/pixels[1]),
                 bloomTexelX=(1/size[0], 0.), bloomTexelY=(0., 1/size[1]))
@@ -215,11 +228,24 @@ def phosphor_profile(name, trace_color, custom):
     return preset_profile(name, trace_color) if PHOSPHORS.get(name) else None
 
 
+def frame_gain(dt, tau):
+    """Normalize post-deposit energy to the 60 Hz reference (stable near zero)."""
+    if dt <= 0 or dt == REFERENCE_FRAME:
+        return 1.
+    def f(x):
+        return x / -math.expm1(-x) if x else 1.
+    return f(REFERENCE_FRAME/tau)/f(dt/tau)
+
+
 def phosphor_uniforms(profile, elapsed, intensity):
     """Shader inputs for a decay profile; decay stays correct at any frame interval."""
     elapsed = max(0., elapsed)
     return dict(fastKeep=math.exp(-elapsed/profile['flash_time']), slowKeep=math.exp(-elapsed/profile['afterglow_time']),
-                slowGain=profile['afterglow_level'], exposure=EXPOSURE*intensity,
+                fastGain=frame_gain(elapsed, profile['flash_time']),
+                slowGain=frame_gain(elapsed, profile['afterglow_time']),
+                stepScale=elapsed/REFERENCE_FRAME if elapsed else 1.,
+                shimmerScale=math.sqrt(elapsed/REFERENCE_FRAME) if elapsed else 1.,
+                afterglowGain=profile['afterglow_level'], exposure=EXPOSURE*intensity,
                 fastColor=hex_color(profile['flash_color']), slowColor=hex_color(profile['afterglow_color']))
 
 

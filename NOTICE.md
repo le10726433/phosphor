@@ -11,6 +11,11 @@ under its own license. Versions are those pinned for the release builds.
 | CPython 3.12 | Runtime | PSF License 2.0 | https://www.python.org |
 | Qt 6.10 and PySide6 / Shiboken6 6.10.3 | Interface and GPU rendering | LGPL-3.0 | https://code.qt.io, https://download.qt.io/official_releases/QtForPython/ |
 | NumPy 2 | Signal and geometry math | BSD-3-Clause (with bundled MIT, Zlib and 0BSD parts) | https://numpy.org |
+| SciPy | Resampling and the track effects' filters | BSD-3-Clause (with bundled libraries under their own permissive licenses) | https://scipy.org |
+| Numba and llvmlite (with LLVM) | Compiled recurrence and model-simplification kernels | BSD-2-Clause; LLVM: Apache-2.0 with LLVM exception | https://numba.pydata.org, https://github.com/numba/llvmlite |
+| python-soundfile | Reading audio clips; WAV and FLAC export | BSD-3-Clause | https://github.com/bastibe/python-soundfile |
+| libsndfile (bundled by soundfile, with its codecs) | Audio file decoding and encoding | LGPL-2.1-or-later (codecs: BSD-style and LGPL) | https://libsndfile.github.io/libsndfile/ |
+| FFmpeg libraries (shipped with Qt Multimedia) | Video file input | LGPL-2.1-or-later | https://ffmpeg.org |
 | python-sounddevice | Audio output | MIT | https://github.com/spatialaudio/python-sounddevice |
 | PortAudio | Audio output (bundled by sounddevice) | MIT | https://www.portaudio.com |
 | Mido | MIDI files and messages | MIT | https://github.com/mido/mido |
@@ -32,6 +37,13 @@ use the unmodified PyPI wheels `PySide6==6.10.3`, whose corresponding source is
 available from the Qt Project at the links above. Unused Qt modules are removed from
 the packages; no Qt code is modified. The LGPL v3 text is at
 https://www.gnu.org/licenses/lgpl-3.0.html.
+
+## libsndfile and FFmpeg (LGPL-2.1-or-later)
+
+libsndfile and the FFmpeg libraries are dynamically linked and shipped as separate
+libraries, from the unmodified PyPI wheels of soundfile and PySide6. You may replace them
+with your own builds. Video export calls an `ffmpeg` program you install yourself; it is not
+shipped with phosphor.
 
 ## Music
 

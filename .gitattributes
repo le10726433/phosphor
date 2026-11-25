@@ -1,3 +1,6 @@
 * text=auto eol=lf
 *.ttf binary
 *.mid binary
+*.bin binary
+*.glb binary
+*.gltf text eol=lf

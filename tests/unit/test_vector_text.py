@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import numpy as np
-from phosphor.engine.vector_text import text_geometry,text_route,validate_text,GLYPHS
+from phosphor.engine.vector_text import text_geometry,text_route,validate_text,GLYPHS,TEXT_OBJECT
 from phosphor.engine.signal_engine import Settings,Shape,planned_path,render,validate
 from phosphor.editor.qt_scene import Scene
 from phosphor.storage.app_files import read_scene
@@ -22,10 +22,10 @@ class VectorTextTests(unittest.TestCase):
                 np.testing.assert_array_equal(vertices[:,2],0.)
         np.testing.assert_array_equal(text_geometry('Hello')[0],text_geometry('HELLO')[0])
 
-    def test_scene_roundtrip_duplicate_and_legacy_default(self):
-        scene=Scene();scene.add(text=True);scene.change('text','Hi, Mike!')
+    def test_scene_roundtrip_and_duplicate(self):
+        scene=Scene();scene.add('Cube');scene.add(TEXT_OBJECT);scene.change('text','Hi, Mike!')
         scene.change('position_x',.3);scene.change('rotation_z',20)
-        scene.add(True);scene.change('text','SECOND')
+        scene.duplicate();scene.change('text','SECOND')
         self.assertEqual(scene.settings.shapes[1].text,'Hi, Mike!')
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'text.scene.json';scene.save(path)
@@ -53,7 +53,7 @@ class VectorTextTests(unittest.TestCase):
         self.assertEqual(len(route),2)
         for text in ('A'*65,'hello\nworld','こんにちは',None):
             with self.subTest(text=text),self.assertRaises(ValueError):validate_text(text)
-        scene=Scene();scene.add(text=True);before=scene.document()
+        scene=Scene();scene.add(TEXT_OBJECT);before=scene.document()
         with self.assertRaises(ValueError):scene.change('text','❌')
         self.assertEqual(scene.document(),before)
 

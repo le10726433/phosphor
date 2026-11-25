@@ -9,6 +9,7 @@ from phosphor.engine.model_object import MAX_MODEL_EDGES, MODEL_OBJECT, Model, l
 from phosphor.editor.qt_scene import Scene
 from phosphor.engine.scene_path import connector_segments
 from phosphor.engine.signal_engine import Settings, Shape, planned_path, validate
+from phosphor.storage.app_files import SCENE_VERSION
 
 CORNERS = ''.join(f'v {x} {y} {z}\n' for x in (-1, 1) for y in (-1, 1) for z in (-1, 1))
 QUADS = ((1, 2, 4, 3), (5, 7, 8, 6), (1, 5, 6, 2), (3, 4, 8, 7), (1, 3, 7, 5), (2, 6, 8, 4))
@@ -55,15 +56,18 @@ class ReductionTests(unittest.TestCase):
         self.assertEqual(len(model_from_obj('v 0 0 0\nv 1 0 0\nv 1 1 0\nf 1 2 3\n')[0].edges), 3)
         self.assertEqual(len(model_from_obj('v 0 0 0\nv 1 0 0\nl 1 2\n')[0].edges), 1)
 
-    def test_dense_models_stay_within_budget(self):
+    def test_dense_models_keep_every_feature_edge(self):
         rows = []
         for i in range(120):
             base = 4*i
             height = i % 2
             rows.append(f'v {i} {height} 0\nv {i+1} {height} 0\nv {i+1} {height} 1\nv {i} {height} 1\nf {base+1} {base+2} {base+3} {base+4}\n')
         model, report = model_from_obj(''.join(rows))
-        self.assertEqual(len(model.edges), MAX_MODEL_EDGES)
-        self.assertTrue(report.limited)
+        # No drawing budget since 0.38.0-dev: all of them are kept, up to the safety limit.
+        self.assertGreater(len(model.edges), 256)
+        self.assertEqual(len(model.edges), report.kept_edges)
+        self.assertLessEqual(len(model.edges), MAX_MODEL_EDGES)
+        self.assertFalse(report.limited)
 
     def test_model_is_centred_and_unit_radius(self):
         points = np.array(model_from_obj(two_cubes())[0].vertices)
@@ -104,21 +108,21 @@ class SceneTests(unittest.TestCase):
         scene = Scene()
         scene.add_model(model_from_obj(CUBE, 'crate')[0])
         document = scene_document(scene.settings, 'mixed', '')
-        self.assertEqual(document['version'],10)
+        self.assertEqual(document['version'], SCENE_VERSION)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'scene.json'
             atomic_json(path, document)
             self.assertEqual(read_scene(path)[0].shapes, scene.settings.shapes)
 
     def test_scenes_without_models_keep_their_format(self):
-        document = scene_document(Settings(), 'mixed', '')
-        self.assertEqual(document['version'],10)
+        document = scene_document(Settings(shapes=(Shape(),)), 'mixed', '')
+        self.assertEqual(document['version'], SCENE_VERSION)
         self.assertNotIn('model', document['shapes'][0])
 
-    def test_import_adds_or_replaces(self):
+    def test_import_adds_an_object(self):
         scene = Scene()
         model = model_from_obj(CUBE)[0]
-        scene.add_model(model, True)
+        scene.add_model(model)
         self.assertEqual((len(scene.settings.shapes), scene.shape.solid), (1, MODEL_OBJECT))
         scene.add_model(model)
         self.assertEqual((len(scene.settings.shapes), scene.selected), (2, 1))

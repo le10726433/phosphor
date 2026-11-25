@@ -1,5 +1,7 @@
 """Native/--headless constructor interactions and frozen audio snapshot checks."""
 import _path  # noqa: F401  (makes the phosphor package importable)
+from _screen import check_size,exit_cleanly_on_failure
+exit_cleanly_on_failure()
 import os,sys,tempfile
 if '--headless' in sys.argv:os.environ['QT_QPA_PLATFORM']='offscreen'
 from pathlib import Path
@@ -13,12 +15,13 @@ from phosphor.editor import qt_app as q
 from phosphor.engine.custom_shape import Drawing,CUSTOM_OBJECT
 from phosphor.storage.app_files import read_scene
 q.configure_graphics();app=QApplication([])
-w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(100)
+w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(100)
+w.add_object('Tilting circle');w.scene.saved=w.scene.document()  # New scenes are empty; start from one circle.
 before=w.scene.document();w.open_builder();QTest.qWait(100);b=w.builder
 assert w.building and not w.splitter.isVisible()
 for width,height in ((1000,700),(1220,840)):
     w.resize(width,height);QTest.qWait(50)
-    assert w.width()==width and w.height()==height,(w.size(),width,height)
+    check_size(w,width,height)
     assert b.canvas.width()>400 and b.canvas.height()>250
 def click(point):
     p=b.canvas.pixel(point);QTest.mouseClick(b.view,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier,QPoint(*map(round,p)))

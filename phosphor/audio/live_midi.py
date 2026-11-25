@@ -10,6 +10,10 @@ import numpy as np
 from phosphor.audio.midi_synth import MidiSynth
 
 
+def quantise(beat, snap=0.):
+    return round(beat / snap) * snap if snap else beat
+
+
 def mido_module():
     try:
         import mido
@@ -113,6 +117,7 @@ class LiveMidi:
         self.probe_thread = None
         self.probe_results = queue.SimpleQueue()
         self.port_epoch = 0
+        self.note_listener = None  # Optional Composer tap; independent of synth acceptance.
 
     def names(self):
         with self.port_lock:
@@ -157,6 +162,9 @@ class LiveMidi:
 
     def receive(self, message):
         self.last_message = str(message)
+        listener = self.note_listener
+        if listener is not None:
+            listener(message.copy())
         if self.accepting:
             self.commands.put(('message', message.copy()))
 
@@ -194,7 +202,7 @@ class LiveMidi:
     def process(self, frame, settings, mode):
         if self.synth.channel != settings.midi_channel:
             self.send_panic(frame)
-        self.synth.set_options(settings.midi_preset, settings.midi_channel)
+        self.synth.set_options(settings.note_decay, settings.midi_channel)
         while not self.commands.empty():
             kind, value = self.commands.get()
             if kind == 'message':

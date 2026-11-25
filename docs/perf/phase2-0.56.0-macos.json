@@ -1,0 +1,97 @@
+{
+  "header": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "cpu_count": 10,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pyside6": "6.10.3",
+    "graphics_api": "GraphicsApi.Metal",
+    "numba": "0.68.1"
+  },
+  "model_import": {
+    "dense_model_from_obj": 21.140291006304324,
+    "dense_model_route": 32.60583299561404
+  },
+  "model_engine": {
+    "none_scene_plan_per_frame": 0.13360696660432345,
+    "none_render_1s": 27.903334004804492,
+    "spin_perspective_scene_plan_per_frame": 0.1448625000193715,
+    "spin_perspective_render_1s": 17.19887500803452,
+    "spin_motion_expression_scene_plan_per_frame": 0.6303263663236672,
+    "spin_motion_expression_render_1s": 46.029541990719736
+  },
+  "editor_model": {
+    "add_model": 80.6840830045985,
+    "stopped_display_frame_median": 0.5833749964949675,
+    "stopped_display_frame_p90": 1.4623497088905426,
+    "transform_edit_and_frame_median": 1.6849790044943802,
+    "transform_edit_and_frame_p90": 1.9502661045407876
+  },
+  "audio_under_edit": {
+    "idle_block_render_median": 2.521645998058375,
+    "idle_block_render_p90": 3.9563954996992834,
+    "idle_block_render_max": 4.881083004875109,
+    "idle_late_writes": 0,
+    "idle_worst_lateness": 0.0,
+    "editing_block_render_median": 0.8486459992127493,
+    "editing_block_render_p90": 1.4243335026549175,
+    "editing_block_render_max": 3.2767079974291846,
+    "editing_late_writes": 0,
+    "editing_worst_lateness": 0.0
+  },
+  "recurrence": {
+    "lorenz_static_evaluate_per_pose": 2.4020395998377353,
+    "lorenz_static_render_1s": 24.467292008921504,
+    "lorenz_dynamic_first_compile": 387.092582997866,
+    "lorenz_dynamic_interpreter_per_pose": 2.410937500098953,
+    "lorenz_dynamic_evaluate_per_pose": 0.031725000008009374,
+    "lorenz_dynamic_render_1s": 23.377749996143393,
+    "clifford_dynamic_first_compile": 85.91283300484065,
+    "clifford_dynamic_interpreter_per_pose": 2.520893750624964,
+    "clifford_dynamic_evaluate_per_pose": 0.09955834975698963,
+    "clifford_dynamic_render_1s": 26.89920899865683,
+    "order8_first_compile": 93.70920799847227,
+    "order8_interpreter_per_pose": 3.7140541498956736,
+    "order8_evaluate_per_pose": 0.04331249947426841,
+    "order8_render_1s": 24.514582997653633
+  },
+  "song_audio": {
+    "compute_per_audio_second": 0.03386602499958826
+  },
+  "export_render": {
+    "1920x1080_frame_median": 2.107166998030152,
+    "1920x1080_bytes_median": 0.1600204996066168,
+    "3840x2160_frame_median": 6.569354503881186,
+    "3840x2160_bytes_median": 0.6600625056307763
+  },
+  "export_encode": {
+    "1920x1080_libx264": 307.32345414110125,
+    "1920x1080_h264_nvenc": "unavailable",
+    "1920x1080_h264_nvenc_detail": "Error opening output files: Encoder not found",
+    "1920x1080_hevc_nvenc": "unavailable",
+    "1920x1080_hevc_nvenc_detail": "Error opening output files: Encoder not found",
+    "1920x1080_h264_amf": "unavailable",
+    "1920x1080_h264_amf_detail": "Error opening output files: Encoder not found",
+    "1920x1080_h264_qsv": "unavailable",
+    "1920x1080_h264_qsv_detail": "Error opening output files: Encoder not found",
+    "1920x1080_h264_videotoolbox": 198.83801285463355,
+    "1920x1080_hevc_videotoolbox": 193.61590533809078,
+    "3840x2160_libx264": 88.19025062337256,
+    "3840x2160_h264_nvenc": "unavailable",
+    "3840x2160_h264_nvenc_detail": "Error opening output files: Encoder not found",
+    "3840x2160_hevc_nvenc": "unavailable",
+    "3840x2160_hevc_nvenc_detail": "Error opening output files: Encoder not found",
+    "3840x2160_h264_amf": "unavailable",
+    "3840x2160_h264_amf_detail": "Error opening output files: Encoder not found",
+    "3840x2160_h264_qsv": "unavailable",
+    "3840x2160_h264_qsv_detail": "Error opening output files: Encoder not found",
+    "3840x2160_h264_videotoolbox": 66.16715672175047,
+    "3840x2160_hevc_videotoolbox": 62.607898092557605
+  },
+  "export_end_to_end": {
+    "1920x1080_wall": 1.3430134160007583,
+    "1920x1080_wall_per_video_second": 0.44767113866691943,
+    "3840x2160_wall": 4.430751083011273,
+    "3840x2160_wall_per_video_second": 1.4769170276704244
+  }
+}

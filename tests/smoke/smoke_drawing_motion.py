@@ -1,5 +1,7 @@
 """Native/--headless component roles and offset-preserving in-builder assignment."""
 import _path  # noqa: F401  (makes the phosphor package importable)
+from _screen import check_size,exit_cleanly_on_failure
+exit_cleanly_on_failure()
 import os,sys,tempfile,json
 if '--headless' in sys.argv:os.environ['QT_QPA_PLATFORM']='offscreen'
 from types import SimpleNamespace
@@ -14,7 +16,8 @@ from phosphor.editor import qt_app as q
 from phosphor.engine.custom_shape import Drawing,Curve
 from phosphor.engine.signal_engine import builder_motion_parts
 from phosphor.storage.app_files import read_scene
-q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(100)
+q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(100)
+w.add_object('Tilting circle');w.scene.saved=w.scene.document()  # New scenes are empty; start from one circle.
 w.open_builder();QTest.qWait(100);b=w.builder
 fixture=Drawing('Motion assembly',((0,1,1),(1,3,1),(2,0,2),(3,.4,2),(4,.5,3),(5,.7,3)),((0,1),(2,3)),(Curve('Circle',(4,5)),))
 b.commit(fixture);b.fit();b.set_tool('Select')
@@ -56,7 +59,7 @@ b.motion_role.setChecked(False);assert not b.drawing.guides[0].enabled and b.dra
 assert b.drawing.nodes==fixture.nodes
 b.undo();assert len(b.drawing.guides)==1 and len(b.drawing.attachments)==1
 for width,height in ((1000,700),(1220,840)):
-    w.resize(width,height);QTest.qWait(50);assert (w.width(),w.height())==(width,height)
+    w.resize(width,height);QTest.qWait(50);check_size(w,width,height)
     assert b.canvas.width()>400 and b.canvas.height()>250
 b.fit();w.tick();b.canvas.update();QTest.qWait(150)
 shot=w.grab()

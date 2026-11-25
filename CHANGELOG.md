@@ -1,5 +1,48 @@
 # Application changes
 
+## 0.92.1 — Composer, audio tracks and effects, transforms, and the user manual (November 25, 2026)
+
+The first public release since 0.36.1. The full illustrated manual is in
+[docs/manual](docs/manual/README.md) and in the app (**Help › Manual**); it replaces
+`GUIDE.md`.
+
+**Compatibility:** scenes now use version 24 and open from version 11. Scenes saved by
+0.36.1 (version 10) don't open in this release. Projects (`.project.json`) are new.
+
+- **Composer**, a second workspace for songs: scene clips on a timeline (move, split,
+  duplicate, colour), a note roll with chords of up to eight voices, velocity and glide,
+  section markers, a loop, tempo changes and time signatures, metronome, count-in and tap
+  tempo, MIDI import and export, recording from a Live MIDI controller, and cycle audition.
+- **Automation:** lanes for transform fields, equation and object variables, levels and
+  On/Off switches, with linear, curved and hold segments. Muting, soloing or switching an
+  object off sweeps it out of the beam without a click.
+- **Audio tracks:** up to 32 tracks of WAV, FLAC, OGG, MP3 or AIFF clips mixed into the
+  X/Y output, with gain, pan, phase (or a time delay), mute and solo, missing-file
+  relinking and **Collect media**. Up to eight effects per track (filter, saturate,
+  bitcrush, delay, compressor), each parameter automatable.
+- **Library panel:** a file and preset browser with audio preview and drag and drop, and
+  the Effects page for the selected track.
+- **Transforms:** each object has an ordered stack of Rotate, Spin, Translate, Scale,
+  Shear, Mirror, Motion path, Perspective, Map and Noise steps, with expressions, up to
+  eight object variables and saved stacks. Path Start and Trace choose how much of each
+  object is drawn.
+- **Objects:** xyz parametric and recurrence equations with presets; STL, glTF and GLB
+  models with simplification and baked animation; object mute and solo; **Replace** to
+  change an object's type in place; **Inspect one cycle** to see one drawing cycle with a
+  pinned reference.
+- **Output:** choose the output device (or follow the system default as it changes) and
+  the sample rate (44.1–192 kHz); WAV and FLAC export at 16 or 24 bits or 32-bit float;
+  video export of the scope with its audio (needs `ffmpeg` installed).
+- **Display:** the frame rate follows the monitor, a pop-out monitor for a second screen,
+  and two interface styles: Classic, and Modern (rounded controls in Dark, Light or
+  following the system).
+- **Editing:** Undo and Redo in both workspaces, autosave with crash recovery, Open
+  Recent, keyboard shortcuts you can change, and wheel and trackpad preferences.
+- **Performance:** 10 ms playback blocks at any rate with display pacing; faster engine,
+  export and recurrence paths; caches for heavily automated scenes and audio tracks.
+- **Removed:** the old Tk editor, and the Function x(t), y(t) monitor input (equations are
+  now objects in a scene).
+
 ## 0.36.1 — Function plots, video input, builder text and route minimizing (November 11, 2026)
 
 - **Function plots:** Input › Monitor input › Function x(t), y(t) plays and draws two

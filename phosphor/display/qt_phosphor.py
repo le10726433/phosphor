@@ -18,7 +18,11 @@ Item {
     property real fastKeep: 0
     property real slowKeep: 0
     property real exposure: 5
-    property real slowGain: 0
+    property real afterglowGain: 0
+    property real fastGain: 1
+    property real slowGain: 1
+    property real stepScale: 1
+    property real shimmerScale: 1
     property vector3d fastColor: Qt.vector3d(1, 1, 1)
     property vector3d slowColor: Qt.vector3d(1, 1, 1)
     property bool gaussian: false
@@ -35,6 +39,7 @@ Item {
     property vector2d bloomTexelX: Qt.vector2d(0, 0)
     property vector2d bloomTexelY: Qt.vector2d(0, 0)
     property real grain: 0
+    property real viewScale: 1
     property real shimmer: 0
     property real seed: 0
     // Video: the raster ShaderEffect from VIDEO_QML replaces the beam geometry deposit.
@@ -93,9 +98,13 @@ Item {
         property real packedDeposit: root.gaussian ? 1 : 0
         property real fastKeep: root.fastKeep
         property real slowKeep: root.slowKeep
+        property real fastGain: root.fastGain
+        property real slowGain: root.slowGain
+        property real stepScale: root.stepScale
+        property real shimmerScale: root.shimmerScale
         property real shimmer: root.shimmer
         property real seed: root.seed
-        property vector2d viewSize: Qt.vector2d(root.width, root.height)
+        property vector2d viewSize: Qt.vector2d(root.width/root.viewScale, root.height/root.viewScale)
         fragmentShader: accumulateShader
     }
     // Feedback runs through a copy, not a recursive layer. Qt 6.10.3 frees a recursive
@@ -153,11 +162,11 @@ Item {
         property var bloom: bloomedY
         property real bloomGain: root.bloomOn ? root.bloomGain : 0
         property real exposure: root.exposure
-        property real slowGain: root.slowGain
+        property real slowGain: root.afterglowGain
         property vector3d fastColor: root.fastColor
         property vector3d slowColor: root.slowColor
         property real grain: root.grain
-        property vector2d viewSize: Qt.vector2d(root.width, root.height)
+        property vector2d viewSize: Qt.vector2d(root.width/root.viewScale, root.height/root.viewScale)
         fragmentShader: displayShader
     }
 }

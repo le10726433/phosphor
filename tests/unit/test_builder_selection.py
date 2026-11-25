@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import replace
 import numpy as np
-from phosphor.engine.custom_shape import Drawing,Curve,compiled
+from phosphor.engine.custom_shape import Drawing,Curve,compiled,MAX_NODES
 from phosphor.editor.builder_selection import axis_delta,intersects_box
 
 class SelectionTests(unittest.TestCase):
@@ -30,6 +30,6 @@ class SelectionTests(unittest.TestCase):
     def test_overflow_and_out_of_range_moves_are_atomic(self):
         d=self.fixture()
         with self.assertRaises(ValueError):d.translate((0,),(200,0))
-        large=replace(d,nodes=tuple((k,0.,float(k)/10) for k in range(128)),edges=((0,1),),curves=())
+        large=replace(d,nodes=tuple((k,0.,float(k)/1000) for k in range(MAX_NODES)),edges=((0,1),),curves=())
         with self.assertRaises(ValueError):large.paste(d,(0,0))
-        self.assertEqual(len(large.nodes),128)
+        self.assertEqual(len(large.nodes),MAX_NODES)

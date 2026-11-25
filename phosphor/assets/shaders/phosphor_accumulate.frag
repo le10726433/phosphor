@@ -13,6 +13,11 @@ layout(std140, binding = 0) uniform buf {
     float shimmer;   // 0 = off: beam shot noise on newly deposited energy.
     float seed;      // Changes every step, so the noise is new each frame.
     vec2 viewSize;   // Item size in points.
+    // Append scalars after the aligned vec2; Qt binds these by reflected property name.
+    float fastGain;
+    float slowGain;
+    float stepScale;
+    float shimmerScale;
 };
 layout(binding = 1) uniform sampler2D previous;
 layout(binding = 2) uniform sampler2D deposit;
@@ -47,11 +52,13 @@ void main() {
         // Only new energy varies, so persistence averages it out on steady traces and
         // it shows as shimmer on faint, fast strokes. The mean deposit is unchanged.
         vec2 cell = floor(qt_TexCoord0 * viewSize) + vec2(seed * 37.0, seed * 91.0);
-        float n = 1.0 + shimmer * 1.8 * (hash12(cell) - 0.5);
+        float n = max(0.0, 1.0 + shimmer * shimmerScale * 1.8 * (hash12(cell) - 0.5));
         addFast *= n;
         addSlow *= n;
     }
-    float fast = max(0.0, unpack(old.rg) * fastKeep + addFast - STEP);
-    float slow = max(0.0, unpack(old.ba) * slowKeep + addSlow - STEP);
+    addFast *= fastGain;
+    addSlow *= slowGain;
+    float fast = max(0.0, unpack(old.rg) * fastKeep + addFast - STEP * stepScale);
+    float slow = max(0.0, unpack(old.ba) * slowKeep + addSlow - STEP * stepScale);
     fragColor = vec4(pack(fast), pack(slow));
 }

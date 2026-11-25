@@ -1,30 +1,90 @@
-"""Sample-clock synthesis of a melody read from a user-chosen MIDI file.
+"""Generated sources: a scale, a single tone, or the melody of a MIDI file.
 
 One phase drives the beam around the scene, so a chord would distort the figure:
-the app plays the file's top melodic line. No music is bundled with phosphor.
+the app plays a MIDI file's top melodic line. No music is bundled with phosphor: the
+files come from the user's own disk.
 """
 from functools import lru_cache
 from pathlib import Path
 import numpy as np
+from phosphor.storage.app_paths import ASSETS_DIR
 
-SCALE_NAME = 'C-major scale'
+SCALE_NAME = 'Scale'
 MIDI_FILE_SOURCE = 'MIDI file'
-SOURCES = (SCALE_NAME, MIDI_FILE_SOURCE)
+TONE_SOURCE = 'Single tone'
+SOURCES = (SCALE_NAME, MIDI_FILE_SOURCE, TONE_SOURCE)
+SCORE_FOLDER = ASSETS_DIR/'scores'
+# Semitones above the root within one octave.
+SCALE_TYPES = {
+    'Major': (0, 2, 4, 5, 7, 9, 11),
+    'Natural minor': (0, 2, 3, 5, 7, 8, 10),
+    'Harmonic minor': (0, 2, 3, 5, 7, 8, 11),
+    'Major pentatonic': (0, 2, 4, 7, 9),
+    'Minor pentatonic': (0, 3, 5, 7, 10),
+    'Blues': (0, 3, 5, 6, 7, 10),
+    'Chromatic': tuple(range(12)),
+}
+NOTE_RANGE = (21, 108)  # A0 to C8 as MIDI note numbers.
+NOTE_NAMES = ('C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B')
+TONE_RANGE = (.01, 20000.)  # Hz, the old function plot's s frequency range.
+TONE_SECONDS = 10.  # Length of a WAV export of the endless single tone.
+
+
+def note_name(midi):
+    """MIDI 60 is C4."""
+    return f'{NOTE_NAMES[midi % 12]}{midi//12-1}'
+
+
+def scale_ladder(scale_type, root, end):
+    """Notes from the root (the fundamental) up to end inclusive."""
+    steps = SCALE_TYPES[scale_type]
+    return tuple(note for note in range(root, end+1) if (note-root) % 12 in steps)
+
+
+def validate_scale(scale_type, root, end):
+    if scale_type not in SCALE_TYPES:
+        raise ValueError('Select a scale type.')
+    if any(type(value) is not int for value in (root, end)) or not NOTE_RANGE[0] <= root < end <= NOTE_RANGE[1]:
+        raise ValueError(f'The scale needs a start note and a higher end note from {note_name(NOTE_RANGE[0])} to {note_name(NOTE_RANGE[1])}.')
+    if (end-root) % 12 not in SCALE_TYPES[scale_type]:
+        raise ValueError(f'{note_name(end)} is not in the {scale_type.lower()} scale on {note_name(root)}.')
+
+
+@lru_cache(maxsize=32)
+def scale_notes(scale_type, root, end):
+    """Up from the root to the end note and back down, one note per beat."""
+    ladder = np.array(scale_ladder(scale_type, root, end))
+    notes = np.concatenate((ladder, ladder[-2:0:-1]))
+    notes.setflags(write=False)
+    return notes
 CHORD_WINDOW = .015  # Seconds; onsets this close count as one chord.
 REST_SECONDS = .03  # Shorter gaps between melody notes are played legato.
 DEFAULT_TEMPO = 120.
 
 
-def midi_notes(path):
-    """(start s, end s, pitch) for every pitched note, with the file's tempo map applied."""
+def midi_notes(path, with_ticks=False):
+    """(start s, end s, pitch), applying the tempo map and ignoring drum channel 10.
+
+    with_ticks appends (start tick, end tick, velocity) for note-roll conversion.
+    """
     from phosphor.audio.live_midi import mido_module
-    notes, held, clock = [], {}, 0.
-    for message in mido_module().MidiFile(str(path)):
-        clock += message.time
+    mido = mido_module()
+    file = mido.MidiFile(str(path))
+    if file.type == 2 or file.ticks_per_beat <= 0:
+        raise ValueError('Use a synchronous MIDI file with ticks per beat.')
+    notes, held, clock, ticks, tempo = [], {}, 0., 0, 500000
+    for message in mido.merge_tracks(file.tracks):
+        clock += mido.tick2second(message.time, file.ticks_per_beat, tempo)
+        ticks += message.time
+        if message.type == 'set_tempo': tempo = message.tempo
+        if getattr(message, 'channel', None) == 9: continue
+        key = (getattr(message, 'channel', None), getattr(message, 'note', None))
         if message.type == 'note_on' and message.velocity > 0 and message.channel != 9:
-            held.setdefault(message.note, []).append(clock)
-        elif message.type in ('note_on', 'note_off') and held.get(message.note):
-            notes.append((held[message.note].pop(0), clock, message.note))
+            held.setdefault(key, []).append((clock, ticks, message.velocity))
+        elif message.type in ('note_on', 'note_off') and held.get(key):
+            start, first, velocity = held[key].pop(0)
+            note = (start, clock, message.note)
+            notes.append(note + (first, ticks, velocity) if with_ticks else note)
     if not notes:
         raise ValueError(f'No notes found in {Path(path).name}.')
     return sorted(notes)

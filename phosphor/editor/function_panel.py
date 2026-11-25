@@ -1,4 +1,4 @@
-"""Qt controls for the x(t), y(t) function plot (Monitor input: Function)."""
+"""Qt controls for a Parametric equation object, shown in SCENE › Objects."""
 from dataclasses import replace
 import math
 import re
@@ -7,73 +7,90 @@ from PySide6.QtCore import Qt, Signal, QSignalBlocker
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox,
                                QInputDialog, QMessageBox)
 
-from phosphor.engine.function_plot import (FunctionPlot, Variable, PRESETS, MAX_VARIABLES, FREQUENCY_RANGE,
-                                           CompiledPlot, validate_plot)
+from phosphor.engine.function_plot import (FunctionPlot, Variable, PRESETS, MAX_VARIABLES,
+                                           compiled_plot, validate_plot)
+from phosphor.engine.object_replace import renamed_clashes
 from phosphor.storage import function_presets as saved_presets
+from phosphor.engine.transforms import Field, Param
+from phosphor.editor.transform_panel import ParamField
+from phosphor.editor.panel_widgets import InlineCaption, FlowRow
 
-HELP = ('t = seconds · s = 0–1 cycle at the s frequency',
+HELP = ('s = 0–1 along the object · t = seconds · p = beats',
         'sin cos tan asin acos atan atan2 sinh cosh tanh exp log log2 log10 sqrt abs',
         'floor ceil round sign hypot fmod min max clip',
         'square saw tri take a cycle position, like s',
         'pi tau e · math.sin(t) also works · a if s < 0.5 else b')
 PRESET_PROMPT = 'Load a preset…'
+VARIABLE_HELP = ('Time varying: an expression of t (seconds), p (beats at the Composer tempo) and s (0–1 along the object), evaluated every sample '
+                 'and clipped to min–max. Press Enter to apply; right-click › Static to go back to the slider.')
+
+
+class _Message(QLabel):
+    """A message line that takes no room while it is empty (keeps SCENE unscrolled at 1000×700)."""
+    def setText(self, text):
+        super().setText(text); self.setVisible(bool(text))
 
 
 def _caption(text):
-    label = QLabel(text); label.setProperty('inlineCaption', True); label.setFixedWidth(28)
+    label = InlineCaption(text, 28, 28)
     return label
 
 
 class FunctionPanel(QWidget):
     """Edits a FunctionPlot. Emits changed(plot) only with plots that compile."""
     changed = Signal(object)
-    monitor_requested = Signal()
+    automate = Signal(str, bool)  # Variable name, on (Composer only).
+    compile_plot = staticmethod(compiled_plot)
+    validate_plot = staticmethod(validate_plot)
+    store = saved_presets.FUNCTION_STORE  # Built-in and saved presets (subclasses swap it).
+    variable_help = VARIABLE_HELP
+    variable_placeholder = 'f(t, s)'
 
     def __init__(self, slider_class, plot=None):
         super().__init__()
         self.slider_class = slider_class
+        self.automation_allowed = False
+        self.reserved = set()  # The object's own variables (Transform › Variables, T5): refused here.
         self.plot = plot or FunctionPlot()
-        layout = QVBoxLayout(self); layout.setAlignment(Qt.AlignmentFlag.AlignTop); layout.setSpacing(6)
-        self.inactive = QWidget(); inactive = QVBoxLayout(self.inactive); inactive.setContentsMargins(0, 0, 0, 0)
-        inactive.addWidget(QLabel('These play when Monitor input is Function x(t), y(t).'))
-        self.use_button = QPushButton('Monitor this function'); inactive.addWidget(self.use_button)
-        self.use_button.clicked.connect(self.monitor_requested)
-        layout.addWidget(self.inactive)
-        self.presets = QComboBox(); self.presets.setObjectName('function_presets'); layout.addWidget(self.presets)
+        # No layout alignment: an aligned layout is placed at its size hint, which ignores the wrapped help line's
+        # height for width (UI2: it lost a line at a 280 px panel). The panel is never given spare height.
+        layout = QVBoxLayout(self); layout.setSpacing(6)
+        layout.setContentsMargins(0, 0, 0, 0)
+        row = FlowRow(); layout.addLayout(row)  # Wraps in a narrow panel (UI2).
+        self.presets = QComboBox(); self.presets.setObjectName('function_presets'); row.addWidget(self.presets, 1)
         self.presets.activated.connect(self.load_preset)
-        row = QHBoxLayout(); layout.addLayout(row)
-        self.save_button = QPushButton('Save as preset…'); self.save_button.clicked.connect(self.save_preset); row.addWidget(self.save_button)
-        self.delete_button = QPushButton('Delete saved…'); self.delete_button.clicked.connect(self.delete_preset); row.addWidget(self.delete_button)
-        self.presets_path = saved_presets.FUNCTION_PRESETS_PATH
+        self.save_button = QPushButton('Save…'); self.save_button.setToolTip('Save these equations as a preset')
+        self.save_button.clicked.connect(self.save_preset); row.addWidget(self.save_button)
+        self.delete_button = QPushButton('Delete…'); self.delete_button.setToolTip('Delete a saved preset')
+        self.delete_button.clicked.connect(self.delete_preset); row.addWidget(self.delete_button)
+        for button in (self.save_button, self.delete_button): button.setMinimumWidth(button.sizeHint().width())
+        self.presets_path = self.store.path
         self.saved = {}
         self.last_saved_name = ''
         self.entries = {}
-        for axis in ('x', 'y'):
+        for axis in ('x', 'y', 'z'):
             row = QHBoxLayout(); layout.addLayout(row)
             row.addWidget(_caption(f'{axis} ='))
             entry = QLineEdit(); entry.setObjectName(f'function_{axis}'); entry.setPlaceholderText(f'{axis}(t, s)')
             entry.editingFinished.connect(lambda axis=axis: self.expression_edited(axis))
             row.addWidget(entry, 1); self.entries[axis] = entry
-        row = QHBoxLayout(); layout.addLayout(row)
-        caption = QLabel('s frequency (Hz)'); caption.setProperty('inlineCaption', True); caption.setFixedWidth(130); row.addWidget(caption)
-        self.frequency = slider_class(self.plot.frequency, .1, 5000., curve='log'); self.frequency.setObjectName('function_frequency')
-        self.frequency.setFixedHeight(28); self.frequency.edited.connect(self.frequency_edited); row.addWidget(self.frequency, 1)
-        self.error = QLabel(); self.error.setObjectName('function_error'); self.error.setWordWrap(True); layout.addWidget(self.error)
-        layout.addWidget(QLabel('Variables'))
+        self.error = _Message(); self.error.setObjectName('function_error'); self.error.setWordWrap(True); self.error.hide(); layout.addWidget(self.error)
         self.variable_box = QWidget(); self.variable_layout = QVBoxLayout(self.variable_box)
         self.variable_layout.setContentsMargins(0, 0, 0, 0); self.variable_layout.setSpacing(4)
         layout.addWidget(self.variable_box)
-        self.add_button = QPushButton('Add variable'); self.add_button.clicked.connect(self.add_variable); layout.addWidget(self.add_button)
-        for line in HELP: layout.addWidget(QLabel(line))
-        layout.addWidget(QLabel('Output is scaled by MIX › Output level. Left = X · Right = Y.'))
+        row = QHBoxLayout(); layout.addLayout(row)
+        self.add_button = QPushButton('Add variable'); self.add_button.clicked.connect(self.add_variable); row.addWidget(self.add_button)
+        row.addStretch(1)
+        # The help line has its own word-wrapped row under the button (UI1: beside it, it was clipped).
+        help = QLabel(HELP[0]+' · hover for functions'); help.setObjectName('function_help')
+        help.setToolTip('\n'.join((help.text(), *HELP[1:], 'Pitch comes from the source; with the Single tone source, the Frequency slider at the bottom of SCENE sets how often s runs 0–1, in Hz.',
+                                    'Transform moves, sizes and rotates the curve.')))
+        help.setWordWrap(True); layout.addWidget(help)
         self.variable_rows = None
         self.set_plot(self.plot, force=True)
         self.reload_presets()
 
     # Display -----------------------------------------------------------------
-    def set_active(self, active):
-        self.inactive.setVisible(not active)
-
     def set_plot(self, plot, force=False):
         if plot == self.plot and not force: return
         structure = [(v.name, v.low, v.high) for v in plot.variables]
@@ -81,11 +98,10 @@ class FunctionPanel(QWidget):
         self.plot = plot
         for axis, entry in self.entries.items():
             blocker = QSignalBlocker(entry); entry.setText(getattr(plot, axis))
-        blocker = QSignalBlocker(self.frequency); self.frequency.setValue(plot.frequency)
         if rebuild: self.build_variables()
         else:
             for variable, row in zip(plot.variables, self.variable_rows):
-                blocker = QSignalBlocker(row['value']); row['value'].setValue(variable.value)
+                blocker = QSignalBlocker(row['value']); row['value'].set_param(Param(variable.value, variable.expression, variable.points))
         self.add_button.setEnabled(len(plot.variables) < MAX_VARIABLES)
         self.error.setText('')
 
@@ -107,16 +123,28 @@ class FunctionPanel(QWidget):
                 top.addWidget(field, 0 if width else 1); fields[key] = field
             remove = QPushButton('✕'); remove.setFixedWidth(32); remove.setToolTip(f'Remove {variable.name}')
             remove.clicked.connect(lambda checked=False, index=index: self.remove_variable(index)); top.addWidget(remove)
-            value = self.slider_class(variable.value, variable.low, variable.high); value.setObjectName('variable_value')
-            value.setFixedHeight(28); value.edited.connect(lambda number, index=index: self.variable_value_edited(index, number))
+            # Right-click: Static (the slider) or Time varying (an expression of t and s).
+            value = ParamField(self.slider_class, Field(variable.name, 'value', variable.value, variable.low, variable.high),
+                               self.variable_help, self.variable_placeholder, caption_width=44)
+            value.setObjectName('variable_value'); value.set_param(Param(variable.value, variable.expression, variable.points))
+            value.automation_allowed = self.automation_allowed
+            value.automate.connect(lambda on, name=variable.name: self.automate.emit(name, on))
+            value.changed.connect(lambda param, index=index: self.variable_param_edited(index, param))
             rows.addWidget(value)
             self.variable_layout.addWidget(box)
             self.variable_rows.append(dict(fields, value=value))
 
+    def set_automation(self, allowed):
+        self.automation_allowed = allowed
+        for row in getattr(self, "variable_rows", ()): row["value"].automation_allowed = allowed
+
     # Edits ---------------------------------------------------------------------
     def propose(self, plot, rebuild=False):
         """Publish plot if it compiles; otherwise show why and keep the last good plot."""
-        try: CompiledPlot(plot)
+        clash = next((v.name for v in plot.variables if v.name in self.reserved), None)
+        if clash is not None:  # User decision, November 21, 2026: equation and object variables never share a name.
+            self.error.setText(f'{clash} is a variable of this object (Transform › Variables); choose another name.'); return False
+        try: self.compile_plot(plot)
         except ValueError as error:
             self.error.setText(str(error)); return False
         previous = self.plot
@@ -132,19 +160,19 @@ class FunctionPanel(QWidget):
         if text == getattr(self.plot, axis): self.error.setText(''); return
         self.propose(replace(self.plot, **{axis: text}))
 
-    def frequency_edited(self, value):
-        self.propose(replace(self.plot, frequency=float(value)))
-
     # Presets -------------------------------------------------------------------
     def reload_presets(self, path=None):
         """Fill the list: built-ins, then this user's saved presets."""
         if path is not None: self.presets_path = path
-        try: self.saved = saved_presets.read_function_presets(self.presets_path)
+        notices = []
+        try:
+            self.saved = self.store.read(self.presets_path, notices)
+            if notices: self.error.setText('Saved presets: ' + ' · '.join(notices))
         except (OSError, ValueError) as error:
             self.saved = {}; self.error.setText(f'Saved presets could not be read: {error}')
         blocker = QSignalBlocker(self.presets); self.presets.clear()
         self.presets.addItem(PRESET_PROMPT, None)
-        for name in PRESETS: self.presets.addItem(name, ('builtin', name))
+        for name in self.store.builtins: self.presets.addItem(name, ('builtin', name))
         if self.saved:
             self.presets.insertSeparator(self.presets.count())
             for name in self.saved: self.presets.addItem(f'★ {name}', ('saved', name))
@@ -155,9 +183,13 @@ class FunctionPanel(QWidget):
         blocker = QSignalBlocker(self.presets); self.presets.setCurrentIndex(0)
         if not source: return
         kind, name = source
-        plot = PRESETS[name] if kind == 'builtin' else self.saved[name]
+        plot = self.store.builtins[name] if kind == 'builtin' else self.saved[name]
         if kind == 'saved': self.last_saved_name = name
-        if self.propose(plot, rebuild=True): self.set_plot(plot, force=True)
+        notices = []  # A preset variable named like an object variable is renamed (T5).
+        plot = renamed_clashes(plot, self.reserved, notices)
+        if self.propose(plot, rebuild=True):
+            self.set_plot(plot, force=True)
+            if notices: self.error.setText(' '.join(notices))
 
     def apply_pending_edits(self):
         """Apply typed but unentered expressions; False if one does not compile."""
@@ -173,10 +205,10 @@ class FunctionPanel(QWidget):
             name, accepted = QInputDialog.getText(self, 'Save as preset', 'Preset name', text=self.last_saved_name)
             if not accepted: return False
         try:
-            name = saved_presets.preset_name(name)
+            name = self.store.preset_name(name)
             if name in self.saved and QMessageBox.question(self, 'Save preset', f'Replace the saved preset "{name}"?') != QMessageBox.StandardButton.Yes:
                 return False
-            saved_presets.save_function_preset(name, self.plot, self.presets_path)
+            self.store.save(name, self.plot, self.presets_path)
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, 'Save preset', str(error)); return False
         self.last_saved_name = name
@@ -193,7 +225,7 @@ class FunctionPanel(QWidget):
             if not accepted: return False
             if QMessageBox.question(self, 'Delete saved preset', f'Delete "{name}"? This cannot be undone.') != QMessageBox.StandardButton.Yes:
                 return False
-        try: saved_presets.delete_function_preset(name, self.presets_path)
+        try: self.store.delete(name, self.presets_path)
         except (OSError, ValueError) as error:
             QMessageBox.warning(self, 'Delete saved preset', str(error)); return False
         if self.last_saved_name == name: self.last_saved_name = ''
@@ -202,7 +234,7 @@ class FunctionPanel(QWidget):
         return True
 
     def add_variable(self):
-        used = {v.name for v in self.plot.variables}
+        used = {v.name for v in self.plot.variables} | self.reserved
         name = next(n for n in (*'abcdfghjkmnpqruvwz', *(f'v{i}' for i in range(1, 20))) if n not in used)
         self.propose(replace(self.plot, variables=(*self.plot.variables, Variable(name, 1., 0., 10.))), rebuild=True)
 
@@ -214,6 +246,13 @@ class FunctionPanel(QWidget):
     def variable_value_edited(self, index, value):
         variable = self.plot.variables[index]
         self.propose(self.plot.with_variable(variable.name, float(value)))
+
+    def variable_param_edited(self, index, param):
+        variables = list(self.plot.variables)
+        variables[index] = replace(variables[index], value=min(max(param.value, variables[index].low), variables[index].high),
+                                   expression=param.expression)
+        if self.propose(replace(self.plot, variables=tuple(variables))):
+            self.variable_rows[index]['value'].set_param(Param(variables[index].value, variables[index].expression, variables[index].points))
 
     def variable_field_edited(self, index, key):
         row, variable = self.variable_rows[index], self.plot.variables[index]
@@ -230,12 +269,15 @@ class FunctionPanel(QWidget):
                 changed = replace(changed, value=min(max(changed.value, changed.low), changed.high))
             variables = list(self.plot.variables); variables[index] = changed
             plot = replace(self.plot, variables=tuple(variables))
-            if key == 'name':  # Follow the rename in both expressions.
+            if key == 'name':  # Follow the rename in every coordinate expression.
                 rename = lambda expression: re.sub(rf'(?<![\w.]){re.escape(variable.name)}\b', text, expression)
-                plot = replace(plot, x=rename(plot.x), y=rename(plot.y))
-            validate_plot(plot) if key != 'name' else None
+                plot = replace(plot, x=rename(plot.x), y=rename(plot.y), z=rename(plot.z))
+            self.validate_plot(plot) if key != 'name' else None
         except ValueError as error:
             self.error.setText(str(error)); row[key].setText(variable.name if key == 'name' else f'{getattr(variable, key):g}')
             return
         if not self.propose(plot, rebuild=True):
             row[key].setText(variable.name if key == 'name' else f'{getattr(variable, key):g}')
+        elif key == 'name':  # Show the renamed variable in every coordinate expression.
+            for axis, entry in self.entries.items():
+                blocker = QSignalBlocker(entry); entry.setText(getattr(plot, axis))

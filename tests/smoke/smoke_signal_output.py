@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt,QPoint
 from PySide6.QtTest import QTest
 from phosphor.editor import qt_app as q
 from phosphor.engine.custom_shape import Drawing,Curve,CUSTOM_OBJECT
-q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(50)
+q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(50)
 w.scene.add();w.sync();before=w.scene.document();dirty=w.scene.dirty
 w.apply_signal_preferences(q.DEFAULT_SIGNAL_PREFERENCES)
 with tempfile.TemporaryDirectory() as folder:
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as folder:
 w.apply_signal_preferences(dict(corner_dwell_us=0.,shape_redraw=True,shape_redraw_count=32))
 complex=Drawing('Large circle',((0,0,0),(1,100,0)),(),(Curve('Circle',(0,1)),))
 large=q.Shape(solid=CUSTOM_OBJECT,custom=complex)
-w.scene.settings=replace(w.scene.settings,shapes=(large,large))
+w.scene.settings=replace(w.scene.settings,shapes=(large,)*15)  # 15 × 574 points × 32 draws passes the 262144-point redraw limit.
 assert w.output_settings().shape_redraw_count==1 and 'Redraw inactive' in w.redraw_notice
 w.timer.stop();w.shutdown_audio();w.force_close=True;w.close();app.processEvents()
 print('Signal output redraw passed: enable/integer, effective playback settings, Apply/Cancel/Defaults, persistence and scene independence.')

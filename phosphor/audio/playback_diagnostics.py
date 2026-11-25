@@ -1,4 +1,10 @@
-"""Measure actual presentation and processing during stopped/play/stopped phases."""
+"""Measure actual presentation and processing during stopped/play/stopped phases.
+
+Two clocks (audit B11): `presentation` counts the active view's frame swaps (frames that
+reached the screen); `preparation_starts` counts Window.display_frame starts, when a frame's
+samples were prepared. A GUI thread stuck in paint still starts frames on time, so only the
+swaps show the stutter a user sees.
+"""
 import time
 import os
 import numpy as np
@@ -7,13 +13,24 @@ import numpy as np
 def timing_stats(values):
     values = np.asarray(list(values), dtype=float)
     return dict(count=len(values), median=float(np.median(values)),
-                p95=float(np.percentile(values,95)), maximum=float(np.max(values))) if len(values) else {}
+                p95=float(np.percentile(values,95)), p99=float(np.percentile(values,99)),
+                maximum=float(np.max(values))) if len(values) else {}
 
 
 def presentation_stats(stamps, elapsed):
     stamps = list(stamps)
     return dict(frames=len(stamps), fps=len(stamps)/elapsed if elapsed > 0 else 0,
                 intervals_ms=timing_stats(np.diff(stamps)*1000))
+
+
+def pacing(stamps, clock, skip=10):
+    """Frame pacing from timestamps (seconds), skipping the first `skip` intervals: count, fps,
+    median, p95 and p99 interval in ms, and which clock the stamps come from."""
+    intervals = np.diff(list(stamps))[skip:]*1000
+    if not len(intervals): return dict(clock=clock, count=0)
+    return dict(clock=clock, count=len(intervals), fps=1000/float(np.mean(intervals)),
+                median_interval_ms=float(np.median(intervals)), p95_interval_ms=float(np.percentile(intervals,95)),
+                p99_interval_ms=float(np.percentile(intervals,99)))
 
 
 class PlaybackDiagnostics:
@@ -25,7 +42,7 @@ class PlaybackDiagnostics:
     def begin(self, name):
         w = self.window
         self.name, self.started = name, time.perf_counter()
-        w.frame_times.clear(); w.tick_times.clear()
+        w.frame_times.clear(); w.swap_times.clear(); w.tick_times.clear()
         w.prep_ms.clear(); w.host.scope.upload_ms.clear()
         w.audio.synthesis_ms.clear(); w.audio.write_wait_ms.clear()
         self.audio_frames = w.audio.frames
@@ -37,7 +54,8 @@ class PlaybackDiagnostics:
         w = self.window
         elapsed = time.perf_counter()-self.started
         self.phases[self.name] = dict(seconds=elapsed,
-            presentation=presentation_stats(w.frame_times,elapsed),
+            presentation=presentation_stats(w.swap_times,elapsed),
+            preparation_starts=presentation_stats(w.frame_times,elapsed),
             ui_updates=presentation_stats(w.tick_times,elapsed),
             sample_preparation_ms=timing_stats(w.prep_ms),
             geometry_upload_ms=timing_stats(w.host.scope.upload_ms),
@@ -64,4 +82,5 @@ class PlaybackDiagnostics:
             reported_audio_latency_seconds=w.audio.playback.latency,
             render_loop=os.environ.get('QSG_RENDER_LOOP'),
             screen_refresh_hz=w.host.view.screen().refreshRate() if w.host.view.screen() else None,
-            note='Presentation events are measured; geometry timing excludes GPU completion.')
+            note='presentation counts frame swaps of the active view; preparation_starts counts display_frame starts; '
+                 'geometry timing excludes GPU completion.')

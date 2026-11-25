@@ -12,7 +12,7 @@ layout(std140, binding = 0) uniform buf {
 };
 layout(binding = 1) uniform sampler2D source;
 
-const int MAX_RADIUS = 24;  // Three times the largest sigma in phosphor.py.
+const int MAX_RADIUS = 72;  // Three times the largest sigma in phosphor.py.
 
 float energyAt(vec2 uv) {
     vec4 value = texture(source, uv);

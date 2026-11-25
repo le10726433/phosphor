@@ -13,7 +13,7 @@ import time
 HERE = Path(__file__).resolve().parent
 
 import numpy as np
-from phosphor.engine.signal_engine import Settings, render, select_signal
+from phosphor.engine.signal_engine import Settings, Shape, render, select_signal
 from phosphor.engine.solids import SOLIDS
 from phosphor.audio.score_source import SOURCES
 from phosphor.editor.qt_platform import configure_graphics, graphics_api
@@ -56,7 +56,7 @@ def main():
 
         def __init__(self):
             super().__init__()
-            self.settings = Settings()
+            self.settings = Settings(shapes=(Shape(),))
             self.mode = 'mixed'
             self.device = ''
             self.preferences = read_preferences()
@@ -92,11 +92,11 @@ def main():
         def backend(self): return self._backend
         @Property('QVariantMap', notify=changed)
         def values(self):
-            s = self.settings
-            return dict(source=s.source, solid=s.solid, bpm=s.bpm, gain=s.drawing_gain,
+            s = self.settings; shape = s.shapes[0] if s.shapes else Shape()
+            return dict(source=s.source, solid=shape.solid, bpm=s.bpm, gain=s.drawing_gain,
                         blend=s.music_gain, mode=self.mode, glow=self.glow,
-                        x=s.rotation_x, y=s.rotation_y, z=s.rotation_z,
-                        loaded=bool(s.shapes))
+                        x=shape.rotation_x, y=shape.rotation_y, z=shape.rotation_z,
+                        loaded=len(s.shapes) != 1)
 
         @Slot(str, 'QVariant')
         def setValue(self, key, value):
@@ -105,9 +105,11 @@ def main():
                 elif key == 'glow': self.glow = bool(value)
                 elif key == 'mode': self.mode = str(value)
                 elif key == 'solid':
-                    self.settings = replace(self.settings, solid=str(value), shapes=())
+                    shape = self.settings.shapes[0] if self.settings.shapes else Shape()
+                    self.settings = replace(self.settings, shapes=(replace(shape, solid=str(value)),))
                 elif key in ('x', 'y', 'z'):
-                    self.settings = replace(self.settings, **{'rotation_'+key:round(float(value)), 'shapes':()})
+                    shape = self.settings.shapes[0] if self.settings.shapes else Shape()
+                    self.settings = replace(self.settings, shapes=(replace(shape, **{'rotation_'+key:round(float(value))}),))
                 else:
                     if key == 'source': self.audio.stop()
                     field = {'gain':'drawing_gain', 'blend':'music_gain'}.get(key, key)

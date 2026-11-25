@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QEvent, QMimeData, QPoint, QSignalBlocker
-from PySide6.QtGui import QColor, QKeySequence
+from PySide6.QtGui import QColor, QKeySequence, QInputDevice
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,
     QLineEdit,QCheckBox,QDoubleSpinBox,QComboBox,QFileDialog,QApplication,QMenu,QMessageBox)
 from PySide6.QtQuick import QQuickWindow,QSGNode
@@ -17,6 +17,8 @@ from phosphor.display.qt_scope import GpuScope
 from phosphor.display.qt_geometry import stroke_triangles
 from phosphor.storage.app_files import atomic_json
 from phosphor.editor.builder_selection import axis_delta,intersects_box,dashed_lines
+from phosphor.editor.shortcuts import key_sequences
+from phosphor.editor import wheel_mapping, scroll_mapping
 from phosphor.engine.motion_path import guide_route
 from phosphor.engine.drawing_motion import set_role,reconcile,validate_routes,segment_indices
 
@@ -64,9 +66,38 @@ class ConstructionCanvas(GpuScope):
         self.editor.hover(np.array([event.position().x(),event.position().y()]),event.modifiers());event.accept()
 
     def wheelEvent(self,event):
-        p=np.array([event.position().x(),event.position().y()]);world=self.world(p)
-        self.zoom=float(np.clip(self.zoom*1.15**(event.angleDelta().y()/120),.005,12))
-        self.pan+=p-self.pixel(world);self.update();event.accept()
+        pixel, angle = event.pixelDelta(), event.angleDelta()
+        device = event.pointingDevice()
+        if scroll_mapping.is_trackpad(pixel.x(), pixel.y(), device is not None and device.type() == QInputDevice.DeviceType.TouchPad,
+                                      event.phase() != Qt.ScrollPhase.NoScrollPhase):
+            # A trackpad (UI2, overseer): two fingers pan the canvas with the fingers, like a touchscreen
+            # (finger pixels times the trackpad sensitivity); pinch zooms (event). A touchpad without
+            # pixel deltas: a third of a pixel per angle unit, as in the Composer roll.
+            moved = (pixel.x(), pixel.y()) if not pixel.isNull() else (angle.x() / 3, angle.y() / 3)
+            self.pan += [scroll_mapping.trackpad_pixels(v, self.editor.trackpad_sensitivity) for v in moved]
+            self.update(); event.accept(); return
+        key = self.editor.wheel_mapping['wheel_builder_zoom']
+        if not wheel_mapping.matches(event.modifiers(), key, unmodified_any=True):
+            event.ignore(); return
+        if key == 'alt' and self.editor.alt_wheel_filter is not None:
+            self.editor.alt_wheel_filter.mark()
+        delta = angle.y()
+        if key != 'none': delta = delta or angle.x()
+        notches = scroll_mapping.wheel_notches(delta, self.editor.wheel_sensitivity)
+        self.zoom_about(np.array([event.position().x(),event.position().y()]), 1.15**notches); event.accept()
+
+    def zoom_about(self, p, factor):
+        """Zoom the canvas by factor keeping the point under pixel p in place."""
+        world=self.world(p)
+        self.zoom=float(np.clip(self.zoom*factor,.005,12))
+        self.pan+=p-self.pixel(world);self.update()
+
+    def event(self, event):
+        # Trackpad pinch (UI2) zooms the canvas around the pointer.
+        if event.type() == QEvent.Type.NativeGesture and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+            factor = scroll_mapping.pinch_factor(event.value(), self.editor.trackpad_sensitivity)
+            self.zoom_about(np.array([event.position().x(), event.position().y()]), factor); event.accept(); return True
+        return super().event(event)
 
     def keyPressEvent(self,event):
         if event.key()==Qt.Key.Key_Escape:self.editor.cancel_gesture()
@@ -176,6 +207,12 @@ class ShapeBuilder(QWidget):
 
     def __init__(self,view_host,parent=None):
         super().__init__(parent)
+        from phosphor.editor.composer_view import _AltWheelFilter
+        import sys
+        self.wheel_mapping = wheel_mapping.defaults()
+        self.wheel_sensitivity = scroll_mapping.DEFAULT_WHEEL_SENSITIVITY  # Preferences › Controls (UI2).
+        self.trackpad_sensitivity = scroll_mapping.DEFAULT_TRACKPAD_SENSITIVITY
+        self.alt_wheel_filter = _AltWheelFilter(self) if sys.platform != 'darwin' else None
         self.drawing=Drawing();self.last_applied=self.drawing
         self.past=[];self.future=[];self.pending=[];self.hover_point=None
         self.selected=None;self.selected_edge=None;self.snap_target=None
@@ -219,7 +256,7 @@ class ShapeBuilder(QWidget):
         self.view.installEventFilter(self)
         self.container=QWidget.createWindowContainer(self.view,self);self.container.setMinimumSize(300,260);body.addWidget(self.container,1)
         self.view.widthChanged.connect(self.resize_canvas);self.view.heightChanged.connect(self.resize_canvas)
-        panel=QWidget();panel.setFixedWidth(245);right=QVBoxLayout(panel);right.setContentsMargins(0,0,0,0);body.addWidget(panel)
+        panel=QWidget();panel.setFixedWidth(245);right=QVBoxLayout(panel);right.setContentsMargins(0,0,0,0);right.setSpacing(6);body.addWidget(panel)  # Explicit: macOS's default spacing squeezed the style rows at 1000x700.
         self.selection=QLabel('Click a node to edit');self.selection.setWordWrap(True);right.addWidget(self.selection)
         # Node controls hide while whole shapes are selected, when the style rows show instead.
         self.node_panel=QWidget();node_rows=QVBoxLayout(self.node_panel);node_rows.setContentsMargins(0,0,0,0);right.addWidget(self.node_panel)
@@ -630,10 +667,10 @@ class ShapeBuilder(QWidget):
         self.selected=None;self.refresh()
         menu=QMenu(self);actions={}
         for text,key,callback,enabled in (
-            ('Copy',QKeySequence.StandardKey.Copy,self.copy_selection,bool(self.selected_segments)),
-            ('Cut',QKeySequence.StandardKey.Cut,self.cut_selection,bool(self.selected_segments)),
-            ('Paste',QKeySequence.StandardKey.Paste,lambda:self.paste_selection(self.canvas.world(p)),self.clipboard_drawing() is not None)):
-            action=menu.addAction(text);action.setShortcut(QKeySequence(key));action.setEnabled(enabled);actions[action]=callback
+            ('Copy','copy',self.copy_selection,bool(self.selected_segments)),
+            ('Cut','cut',self.cut_selection,bool(self.selected_segments)),
+            ('Paste','paste',lambda:self.paste_selection(self.canvas.world(p)),self.clipboard_drawing() is not None)):
+            action=menu.addAction(text);action.setShortcuts(key_sequences(key));action.setProperty('shortcut_id',key);action.setEnabled(enabled);actions[action]=callback
         self.context_popup=menu
         try:chosen=menu.exec(self.view.mapToGlobal(QPoint(*map(round,p))))
         finally:self.context_popup=None;menu.deleteLater()

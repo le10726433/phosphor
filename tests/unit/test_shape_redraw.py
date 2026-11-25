@@ -38,7 +38,7 @@ class RedrawTests(unittest.TestCase):
             np.testing.assert_allclose(cumulative,np.r_[0,np.cumsum(lengths)])
         complex=Drawing('Large circle',((0,0,0),(1,100,0)),(),(Curve('Circle',(0,1)),))
         large=Shape(solid=CUSTOM_OBJECT,custom=complex)
-        with self.assertRaisesRegex(ValueError,'detail budget'):planned_path(0,60,(large,large),'No changes',8,0.,32)
+        with self.assertRaisesRegex(ValueError,'detail budget'):planned_path(0,60,(large,)*15,'No changes',8,0.,32)
 
     def test_chunk_timing_dwell_and_original_audio_unchanged(self):
         settings=replace(Settings(),shapes=(Shape('Square (2D)',-.5,0,.2),Shape('Triangle (2D)',.5,0,.2)),corner_dwell_us=50.,shape_redraw_count=3)

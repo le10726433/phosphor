@@ -4,7 +4,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog,QVBoxLayout,QLabel,QComboBox,QDoubleSpinBox,
     QCheckBox,QListWidget,QListWidgetItem,QDialogButtonBox)
-from phosphor.engine.signal_engine import is_motion_guide,validate,world_motion_route,projected_solid
+from phosphor.engine.signal_engine import is_motion_guide,validate,world_motion_route,posed_object
 from phosphor.engine.motion_path import Motion
 
 class MotionDialog(QDialog):
@@ -66,7 +66,7 @@ class MotionDialog(QDialog):
                 guide=next(s for s in shapes if s.uid==guide_id);world_motion_route(guide)
                 centers=[]
                 for i in indices:
-                    shape=shapes[i];vertices=projected_solid(0,shape)*shape.shape_size
+                    shape=shapes[i];vertices=posed_object(0,shape)[0]*shape.shape_size
                     centers.append((vertices.min(axis=0)+vertices.max(axis=0))/2+[shape.position_x,shape.position_y])
                 anchor=tuple(np.mean(centers,axis=0).tolist())
                 binding=Motion(guide_id,self.speed.value(),self.endpoint.currentText(),self.follow.isChecked(),self.angle.value(),anchor).validate()

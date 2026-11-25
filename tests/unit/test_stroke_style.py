@@ -6,6 +6,7 @@ import numpy as np
 
 from phosphor.engine.custom_shape import Curve, Drawing, compiled, paths, text_drawing
 from phosphor.engine.stroke_style import Style, _distance, bold_outline, corner_indices, set_style, style_of
+from phosphor.storage.app_files import SCENE_VERSION
 
 # An H: stems split at the crossbar, so three strokes meet at two nodes.
 H = Drawing('H', ((0, 0., 0.), (1, 0., 1.), (2, 0., .5), (3, .6, 0.), (4, .6, 1.), (5, .6, .5)),
@@ -106,7 +107,7 @@ class StyleDataTests(unittest.TestCase):
         styled = set_style(H, {0}, bold=.12, depth=.3)
         settings = Settings(shapes=(Shape(solid=CUSTOM_OBJECT, custom=styled),))
         document = scene_document(settings, 'drawing', '')
-        self.assertEqual(document['version'], 10)
+        self.assertEqual(document['version'], SCENE_VERSION)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'styled.scene.json'; atomic_json(path, document)
             self.assertEqual(read_scene(path)[0].shapes[0].custom, styled)
@@ -122,8 +123,9 @@ class TextDrawingTests(unittest.TestCase):
         self.assertEqual(len(compiled(drawing)[3]), 3)  # H, I and ! (two strokes) apart.
 
     def test_text_limits(self):
-        for text, message in (('   ', 'Type'), ('aé', 'Use letters'), ('8'*40, 'nodes')):
+        for text, message in (('   ', 'Type'), ('aé', 'Use letters')):
             with self.assertRaisesRegex(ValueError, message): text_drawing(text)
+        self.assertGreater(len(text_drawing('8'*40, .05).nodes), 128)  # Was over the old 128-node budget.
         with self.assertRaises(ValueError): text_drawing('A', 0.)
         with self.assertRaisesRegex(ValueError, 'too large'): text_drawing('W'*20, 20.)
 

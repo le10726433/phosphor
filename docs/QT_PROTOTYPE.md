@@ -4,8 +4,8 @@
 `python app.py` and `LaunchQt.bat` now launch the full Qt editor.
 Its multi-shape editor, unrestricted position/size dragging, XYZ overlays,
 sliders with numeric entry/reset, MIDI setup/recording, scene lifecycle, menus,
-shortcuts and persistent preferences are implemented. `python app.py --cpu` keeps
-the Tk fallback; `python tools/qt_preview.py` keeps this small benchmark. The sections
+shortcuts and persistent preferences are implemented. The Tk fallback was removed in
+0.37.0-dev; `python tools/qt_preview.py` keeps this small benchmark. The sections
 below describe the original 0.4.0 prototype and its limitations, not the new full
 editor. The reviewed source remains tagged `oscilloscope-v0.4.0-reviewed`.
 

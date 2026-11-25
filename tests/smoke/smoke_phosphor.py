@@ -11,7 +11,8 @@ from phosphor.display.phosphor import PHOSPHOR_OFF
 
 # Match qt_app.main: the real window is multisampled, and that changes off-screen rendering.
 q.configure_graphics();surface=QSurfaceFormat();surface.setSamples(4);QSurfaceFormat.setDefaultFormat(surface);app=QApplication([])
-w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.resize(1000,700);w.show();QTest.qWait(300)
+w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.resize(1000,700);w.show();QTest.qWait(300)
+w.add_object('Tilting circle');w.scene.saved=w.scene.document()  # New scenes are empty; start from one circle.
 layer=w.host.phosphor;scope=w.host.scope
 assert layer is not None,'Shaders failed to load'
 base=dict(w.preferences,crt_scanlines=False,crt_glow=False,grid_divisions=2,palette='OLED white',glow_decay=0.,trace_interpolation='Off')
@@ -54,7 +55,9 @@ for _ in range(12):
     scope.signal=circle
     w.update_phosphor(1920,.016);scope.update();QTest.qWait(20)
 glowing,peak=lit()
-assert layer.root.property('bloomOn') and glowing>soft*1.5 and peak>150,(glowing,soft,peak)
+# Glow scales with the scope (0.51.0): this 530 px scope draws glow 16 as about 11.8 px,
+# while the 1 px trace keeps its 1 px blur floor, so the lit area grows less than 1.5x.
+assert layer.root.property('bloomOn') and glowing>soft*1.3 and peak>150,(glowing,soft,peak)
 for _ in range(50):
     w.update_phosphor(0,.016);scope.update();QTest.qWait(12)
 w.apply_preferences(dict(base,phosphor=PHOSPHOR_OFF));w.tick();QTest.qWait(40)

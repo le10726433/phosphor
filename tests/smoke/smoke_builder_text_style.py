@@ -5,6 +5,7 @@ import sys
 import tempfile
 if '--headless' in sys.argv: os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 import numpy as np
@@ -17,7 +18,7 @@ from phosphor.engine.signal_engine import projected_solid
 from phosphor.storage.app_files import read_scene
 q.os.environ['QSG_RENDER_LOOP'] = 'basic'
 q.configure_graphics(); app = QApplication([])
-w = q.Window(SimpleNamespace(scene=None, ready_file=None)); w.resize(1220, 840); w.show(); QTest.qWait(100)
+w = q.Window(SimpleNamespace(scene=None, ready_file=None, workspace='Sandbox')); w.resize(1220, 840); w.show(); QTest.qWait(100)
 w.save_brightness = lambda: None
 w.open_builder(); QTest.qWait(100); b = w.builder
 
@@ -68,7 +69,7 @@ shape = w.scene.shape
 assert shape.solid == CUSTOM_OBJECT and shape.custom.styles == b.drawing.styles
 w.scene.change('rotation_y', 60); w.sync()
 posed = projected_solid(0., w.scene.shape)
-face_on = projected_solid(0., w.scene.shape.__class__(**{**vars(w.scene.shape), 'rotation_y': 0}))
+face_on = projected_solid(0., replace(w.scene.shape, rotation_y=0))
 assert np.ptp(posed[:, 0]) != np.ptp(face_on[:, 0])
 w.tick()
 # Shape files and scene files keep the styles.

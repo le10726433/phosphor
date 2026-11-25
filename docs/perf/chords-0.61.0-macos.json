@@ -1,0 +1,16 @@
+{
+  "header": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "cpu_count": 10,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pyside6": "6.10.3",
+    "graphics_api": "GraphicsApi.Metal",
+    "numba": "0.68.1"
+  },
+  "composer_chords": {
+    "1_voice_compute_per_audio_second": 0.013267291971715167,
+    "8_voice_compute_per_audio_second": 0.09752879099687561,
+    "eight_to_one_ratio": 7.351069924804504
+  }
+}

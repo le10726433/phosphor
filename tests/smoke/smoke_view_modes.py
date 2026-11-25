@@ -17,13 +17,14 @@ def settle_view_mode():
     # Escape during that animation can be consumed by the native transition.
     QTest.qWait(1000 if sys.platform=='darwin' and '--headless' not in sys.argv else 30)
 
-w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(100)
+w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(100)
+w.add_object('Tilting circle');w.scene.saved=w.scene.document()  # New scenes are empty; start from one circle.
 w.apply_signal_preferences(dict(corner_dwell_us=0.))
 before=w.scene.document()
 w.set_fullscreen(True);settle_view_mode()
 assert w.isFullScreen() and w.sidebar.isVisible()
 w.set_immersive(True);settle_view_mode();w.tick()
-assert w.isFullScreen() and w.immersive and not w.sidebar.isVisible()
+assert w.isFullScreen() and w.immersive and not w.sidebar.isVisible() and not w.app_bar.isVisible()
 assert not w.status.isVisible() and not w.viewer_heading.isVisible()
 assert not w.host.scope.overlays and not w.handles
 assert w.stage.fill_screen and w.host.geometry()==w.stage.rect()
@@ -49,11 +50,14 @@ if '--headless' not in sys.argv:
     image.save(str(q.HERE/'.user/oled-immersive.png'))
     w.apply_preferences(baseline);w.timer.start()
 QTest.keyClick(w.host.view,Qt.Key.Key_Escape);settle_view_mode()
-assert not w.immersive and w.isFullScreen() and w.sidebar.isVisible()
+assert not w.immersive and w.isFullScreen() and w.sidebar.isVisible() and w.app_bar.isVisible()
 assert not w.stage.fill_screen and w.host.width()==w.host.height()
 QTest.keyClick(w.host.view,Qt.Key.Key_Escape);settle_view_mode()
 assert not w.isFullScreen()
-w.set_immersive(True);settle_view_mode();w.exit_view_modes();settle_view_mode()
+w.bar_buttons['Trace only'].click();settle_view_mode()
+assert w.immersive and w.immersive_action.isChecked() and w.bar_buttons['Trace only'].isChecked()
+w.exit_view_modes();settle_view_mode()
+assert not w.bar_buttons['Trace only'].isChecked()
 assert not w.isFullScreen() and not w.immersive
 assert w.scene.document()==before
 with tempfile.TemporaryDirectory(dir=q.HERE/'.user') as folder:
@@ -65,19 +69,27 @@ with tempfile.TemporaryDirectory(dir=q.HERE/'.user') as folder:
         buttons=d.findChild(QDialogButtonBox)
         QTest.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Apply),Qt.MouseButton.LeftButton)
         assert q.read_signal_preferences(prefs)['corner_dwell_us']==80
-        slider.commit(140.);d.reject()
-        assert w.output_settings().corner_dwell_us==80
+        slider.commit(140.);assert w.signal_editor.dwell.value==140.  # The side panel follows the preview.
+        d.reject()
+        assert w.output_settings().corner_dwell_us==80 and w.signal_editor.dwell.value==80.
         assert w.scene.document()==before
+        # The Signal output panel applies and saves as you edit; Revert restores the values from when it opened.
+        w.show_panel(q.PANEL_SIGNAL);off=q.ROUTE_MODES[0];w.signal_editor.route.setCurrentText(off)
+        assert w.signal_preferences['route_mode']==off and w.output_settings().route_mode==off
+        w.save_signal_preferences();assert q.read_signal_preferences(prefs)['route_mode']==off
+        w.signal_revert();w.save_signal_preferences()
+        assert q.read_signal_preferences(prefs)['route_mode']!=off and w.output_settings().corner_dwell_us==80
     seen=[]
-    def export(path,settings,duration,source_only=False):
+    def export(path,settings,duration,source_only=False,**kwargs):
         seen.append(settings.corner_dwell_us);Path(path).write_bytes(b'export probe')
     target=Path(folder)/'test.wav'
-    with patch.object(q,'export_wav',side_effect=export),patch.object(q.QFileDialog,'getSaveFileName',return_value=(str(target),'')):
-        w.export();deadline=time.monotonic()+2
+    with patch.object(q,'PREFERENCES_PATH',Path(folder)/'preferences.json'),patch.object(q,'export_wav',side_effect=export),patch.object(q.QFileDialog,'getSaveFileName',return_value=(str(target),'')):
+        w.export(format='WAV',depth=16,rate=48000,range='whole');deadline=time.monotonic()+2
         while w.exporting and time.monotonic()<deadline:QTest.qWait(10);time.sleep(.001)
         assert not w.exporting and seen==[80.] and target.exists()
-w.monitor.setCurrentIndex(1);w.monitor_changed(1)
-assert not w.tabs.isTabEnabled(3)
+        w.preferences_save.stop()
+w.monitor.setCurrentIndex(q.MONITOR_SYSTEM);w.monitor_changed(q.MONITOR_SYSTEM)
+assert not w.bar_buttons[q.PANEL_MIX].isEnabled()
 raw=np.column_stack((.6*np.sin(np.arange(1920)*.04),.3*np.cos(np.arange(1920)*.07))).astype(np.float32)
 w.visualization_gain=4.
 with patch.object(w.capture,'samples',return_value=raw),patch.object(q,'render',side_effect=AssertionError('Capture must bypass shaping')):

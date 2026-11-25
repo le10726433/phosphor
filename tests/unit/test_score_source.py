@@ -49,8 +49,9 @@ class MidiFileSourceTests(unittest.TestCase):
         self.folder.cleanup()
 
     def test_no_music_is_bundled(self):
-        self.assertEqual(SOURCES, (SCALE_NAME, MIDI_FILE_SOURCE))
-        self.assertFalse((Path(__file__).resolve().parent/'assets'/'scores').exists())
+        from phosphor.audio.score_source import SCORE_FOLDER, TONE_SOURCE
+        self.assertEqual(SOURCES, (SCALE_NAME, MIDI_FILE_SOURCE, TONE_SOURCE))
+        self.assertEqual(list(SCORE_FOLDER.glob('*.mid')), [])
 
     def test_file_tempo_gives_original_speed(self):
         self.assertEqual(file_tempo(self.path), 90)
@@ -97,7 +98,7 @@ class MidiFileSourceTests(unittest.TestCase):
         settings = Settings(source=MIDI_FILE_SOURCE, midi_file=self.path, bpm=90)
         document = scene_document(settings, 'mixed', '')
         self.assertEqual((document['version'], document['settings']['midi_file']), (SCENE_VERSION, self.path))
-        self.assertNotIn('midi_file', scene_document(Settings(), 'mixed', '')['settings'])
+        self.assertEqual(scene_document(Settings(), 'mixed', '')['settings']['midi_file'], '')
         with tempfile.TemporaryDirectory() as moved:
             moved = Path(moved)
             write_midi(moved/'tune.mid')

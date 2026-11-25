@@ -12,7 +12,11 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QIcon
 from PySide6.QtWidgets import (QColorDialog, QDoubleSpinBox, QGridLayout, QLabel, QPushButton,
                                QSizePolicy, QVBoxLayout, QWidget)
+from phosphor.display import theme as themes
+from phosphor.editor.layout_metrics import SPIN_MIN
+from phosphor.editor.panel_widgets import FlowRow
 from phosphor.display.phosphor import PROFILE_RANGES, afterglow_level_at, decay_preview
+from phosphor.editor.paint_guard import guarded_paint
 
 T_MIN, T_MAX = 1e-3, 5.
 HANDLE_RADIUS = 6
@@ -63,17 +67,26 @@ class DecayPlot(QWidget):
         return dict(flash=self.to_point(p['flash_time'], flash[0]),
                     afterglow=self.to_point(p['afterglow_time'], afterglow[0]))
 
+    @guarded_paint
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        theme = self.theme
+        style = self.theme or themes.current()
+        theme = style.colors
         painter.fillRect(self.rect(), QColor(theme['field']))
         r = self.plot_rect()
         if not self.isEnabled():
             painter.setOpacity(.35)
         grid = QColor(theme['border'])
         painter.setPen(QPen(grid, 1))
-        font = painter.font(); font.setPointSizeF(max(7., font.pointSizeF()-2)); painter.setFont(font)
+        fonts = style.fonts
+        font = painter.font()
+        modern = style.style == themes.MODERN
+        if modern:
+            font.setPixelSize(fonts.timeline_small_px)
+        else:
+            font.setPointSizeF(max(fonts.plot_min_points, font.pointSizeF()-fonts.plot_shrink))
+        painter.setFont(font)
         for decade in (1e-3, 1e-2, 1e-1, 1.):
             x = self.to_point(decade, 0).x()
             painter.setPen(QPen(grid, 1)); painter.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()))
@@ -106,6 +119,11 @@ class DecayPlot(QWidget):
             for x, value in zip(xs[1:], values[1:]):
                 path.lineTo(QPointF(x, r.bottom()-value*r.height()))
             color = QColor(self.profile[key]) if key else QColor(theme['fg'])
+            if modern and key and themes.needs_under_stroke(color.name(), theme['field']):
+                # Keep the chosen phosphor colour visible (P31 green, yellow or white on the light
+                # field): WCAG luminance contrast, not HSL lightness, decides. Classic never does this.
+                painter.setPen(QPen(QColor(theme['fg']), 3, style))
+                painter.drawPath(path)
             painter.setPen(QPen(color, 1.4 if key else 1.8, style))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
@@ -161,12 +179,14 @@ class PhosphorEditor(QWidget):
     FIELDS = (('flash_time', 'Flash decay (ms)', 1000., 1), ('afterglow_time', 'Afterglow decay (ms)', 1000., 1),
               ('afterglow_level', 'Afterglow level', 1., 3))
 
-    def __init__(self, theme):
+    def __init__(self, theme, compact=False):
+        """compact: a smaller plot and the colour buttons on their own row, for the side panel."""
         super().__init__()
         self.profile = None
         self.syncing = False
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0)
         self.plot = DecayPlot(theme); self.plot.setObjectName('decay_plot')
+        if compact: self.plot.setMinimumSize(200, 140)  # UI2: fits the narrowest side panel.
         self.plot.edited.connect(self.plot_edited)
         layout.addWidget(self.plot, 1)
         grid = QGridLayout(); layout.addLayout(grid)
@@ -177,13 +197,16 @@ class PhosphorEditor(QWidget):
             field.setDecimals(decimals); field.setRange(low*scale, high*scale)
             field.setSingleStep(.01 if scale == 1 else 1.); field.setKeyboardTracking(False)
             field.valueChanged.connect(lambda value, key=key, scale=scale: self.typed(key, value/scale))
+            if compact: field.setMinimumWidth(SPIN_MIN)  # UI2: a minimum; the field widens with the panel.
             grid.addWidget(QLabel(label), row, 0); grid.addWidget(field, row, 1)
             self.fields[key] = (field, scale)
         self.colors = {}
+        if compact: colors = FlowRow(); layout.addLayout(colors)  # Wraps in a narrow side panel (UI2).
         for row, (key, label) in enumerate((('flash_color', 'Flash colour'), ('afterglow_color', 'Afterglow colour'))):
             button = QPushButton(label); button.setObjectName(key)
             button.clicked.connect(lambda checked=False, key=key, label=label: self.pick(key, label))
-            grid.addWidget(button, row, 2)
+            if compact: colors.addWidget(button)
+            else: grid.addWidget(button, row, 2)
             self.colors[key] = button
         grid.setColumnStretch(1, 1)
 

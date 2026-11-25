@@ -1,0 +1,90 @@
+{
+  "header": {
+    "platform": "Windows-11-10.0.26300-SP0",
+    "cpu_count": 32,
+    "python": "3.12.4",
+    "numpy": "1.26.4",
+    "pyside6": "6.10.3",
+    "graphics_api": "GraphicsApi.Direct3D11"
+  },
+  "model_import": {
+    "dense_model_from_obj": 47.11980000138283,
+    "dense_model_route": 80.34950000001118
+  },
+  "model_engine": {
+    "none_scene_plan_per_frame": 0.3810033337989201,
+    "none_render_1s": 42.313300000387244,
+    "spin_perspective_scene_plan_per_frame": 0.4584066661967275,
+    "spin_perspective_render_1s": 46.94929999823216,
+    "spin_motion_expression_scene_plan_per_frame": 1.5353533332624163,
+    "spin_motion_expression_render_1s": 110.48209998989478
+  },
+  "editor_model": {
+    "add_model": 151.63450001273304,
+    "stopped_display_frame_median": 1.563249999890104,
+    "stopped_display_frame_p90": 2.164760007872246,
+    "transform_edit_and_frame_median": 5.554250004934147,
+    "transform_edit_and_frame_p90": 6.3917099992977455
+  },
+  "audio_under_edit": {
+    "idle_block_render_median": 1.7029999944497831,
+    "idle_block_render_p90": 2.677690002019517,
+    "idle_block_render_max": 4.320700012613088,
+    "idle_late_writes": 0,
+    "idle_worst_lateness": 0.0,
+    "editing_block_render_median": 2.988900007039774,
+    "editing_block_render_p90": 5.4857799972523935,
+    "editing_block_render_max": 9.439000001293607,
+    "editing_late_writes": 0,
+    "editing_worst_lateness": 0.0
+  },
+  "recurrence": {
+    "lorenz_static_evaluate_per_pose": 5.807025000103749,
+    "lorenz_static_render_1s": 57.840900000883266,
+    "lorenz_dynamic_evaluate_per_pose": 5.978010000399081,
+    "lorenz_dynamic_render_1s": 427.50649999652524,
+    "clifford_dynamic_evaluate_per_pose": 6.528605000494281,
+    "clifford_dynamic_render_1s": 450.6680999911623,
+    "order8_evaluate_per_pose": 9.439445000316482,
+    "order8_render_1s": 621.5382999944268
+  },
+  "song_audio": {
+    "compute_per_audio_second": 0.4378573900001356
+  },
+  "export_render": {
+    "1920x1080_frame_median": 6.796999994548969,
+    "1920x1080_bytes_median": 1.0985499975504354,
+    "3840x2160_frame_median": 21.28670000092825,
+    "3840x2160_bytes_median": 4.56185000075493
+  },
+  "export_encode": {
+    "1920x1080_libx264": 178.81650297319115,
+    "1920x1080_h264_nvenc": 199.78928889896002,
+    "1920x1080_hevc_nvenc": 209.08017789000812,
+    "1920x1080_h264_amf": "unavailable",
+    "1920x1080_h264_amf_detail": "Conversion failed!",
+    "1920x1080_h264_qsv": "unavailable",
+    "1920x1080_h264_qsv_detail": "Conversion failed!",
+    "1920x1080_h264_videotoolbox": "unavailable",
+    "1920x1080_h264_videotoolbox_detail": "Error opening output files: Encoder not found",
+    "1920x1080_hevc_videotoolbox": "unavailable",
+    "1920x1080_hevc_videotoolbox_detail": "Error opening output files: Encoder not found",
+    "3840x2160_libx264": 47.86642204780832,
+    "3840x2160_h264_nvenc": 66.28106186029372,
+    "3840x2160_hevc_nvenc": 70.83642111252429,
+    "3840x2160_h264_amf": "unavailable",
+    "3840x2160_h264_amf_detail": "Conversion failed!",
+    "3840x2160_h264_qsv": "unavailable",
+    "3840x2160_h264_qsv_detail": "Conversion failed!",
+    "3840x2160_h264_videotoolbox": "unavailable",
+    "3840x2160_h264_videotoolbox_detail": "Error opening output files: Encoder not found",
+    "3840x2160_hevc_videotoolbox": "unavailable",
+    "3840x2160_hevc_videotoolbox_detail": "Error opening output files: Encoder not found"
+  },
+  "export_end_to_end": {
+    "1920x1080_wall": 3.8057189999963157,
+    "1920x1080_wall_per_video_second": 1.2685729999987718,
+    "3840x2160_wall": 10.17247099999804,
+    "3840x2160_wall_per_video_second": 3.3908236666660136
+  }
+}

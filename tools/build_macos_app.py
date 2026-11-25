@@ -108,9 +108,15 @@ def build(dmg=False):
         '--name', 'phosphor', '--icon', icon, '--osx-bundle-identifier', IDENTIFIER,
         '--distpath', DIST, '--workpath', BUILD/'work', '--specpath', BUILD,
         '--paths', HERE, '--add-data', f'{HERE/"phosphor"/"assets"}:phosphor/assets',
+        '--add-data', f'{HERE/"docs"/"manual"}:docs/manual',
+        '--add-data', f'{HERE/"docs"/"MACOS_DEVELOPMENT.md"}:docs',
         # mido picks its backend by name at runtime.
         '--hidden-import', 'mido.backends.rtmidi',
-        # The Tk fallback (app.py --cpu) is not part of the packaged Qt app.
+        '--hidden-import', 'numba',
+        '--hidden-import', 'scipy.signal',
+        '--collect-data', 'soundfile', '--collect-binaries', 'soundfile',
+        '--collect-data', '_soundfile_data', '--collect-binaries', '_soundfile_data',
+        # Nothing uses Tk any more; keep it out of the bundle.
         '--exclude-module', 'tkinter', '--exclude-module', '_tkinter',
         HERE/'tools'/'packaged_entry.py', cwd=HERE)
 
@@ -125,8 +131,8 @@ def build(dmg=False):
                 NSAudioCaptureUsageDescription='Display system audio as a live stereo X-Y trace in phosphor. '
                     'Audio stays in memory and is never played back or saved.')
     with info_path.open('wb') as file: plistlib.dump(info, file)
-
     for name in ('LICENSE', 'NOTICE.md'): shutil.copy(HERE/name, APP/'Contents/Resources'/name)
+
     helpers = APP/'Contents/Helpers'
     helpers.mkdir(exist_ok=True)
     run('ditto', HELPER, helpers/HELPER.name)  # ditto keeps the helper's own signature

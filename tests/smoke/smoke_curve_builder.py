@@ -1,5 +1,7 @@
 """Native/--headless curve tools, selection, gestures, files and output snapshots."""
 import _path  # noqa: F401  (makes the phosphor package importable)
+from _screen import check_size,exit_cleanly_on_failure
+exit_cleanly_on_failure()
 import os,sys,tempfile,json
 if '--headless' in sys.argv:os.environ['QT_QPA_PLATFORM']='offscreen'
 from types import SimpleNamespace
@@ -13,11 +15,11 @@ from PySide6.QtGui import QImage,QPainter
 from phosphor.editor import qt_app as q
 from phosphor.engine.custom_shape import paths
 q.configure_graphics();app=QApplication([])
-w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(100);w.open_builder();QTest.qWait(100)
+w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(100);w.open_builder();QTest.qWait(100)
 b=w.builder
 for width,height in ((1000,700),(1220,840)):
     w.resize(width,height);QTest.qWait(50)
-    assert (w.width(),w.height())==(width,height),(w.size(),width,height)
+    check_size(w,width,height)
     for button in b.tools.values():assert button.isVisible() and button.width()>=button.sizeHint().width()
     assert b.canvas.height()>250 and b.canvas.width()>400
 def click(point):

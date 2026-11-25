@@ -127,6 +127,19 @@ def _shortest_jumps(points, adjacency, components, start):
     return route, jumps
 
 
+def _nearest(sources, targets, points, chunk=256):
+    """For each target vertex: distance to its nearest source vertex and that source (earliest on ties)."""
+    best = np.full(len(targets), math.inf); which = np.zeros(len(targets), dtype=int)
+    other = points[targets]
+    for begin in range(0, len(sources), chunk):
+        block = sources[begin:begin+chunk]
+        d = np.linalg.norm(points[block][:, None]-other[None], axis=2)
+        row = np.argmin(d, axis=0); value = d[row, np.arange(len(targets))]
+        closer = value < best
+        best[closer] = value[closer]; which[closer] = block[row[closer]]
+    return best, which
+
+
 def _shortest_path(points, edges, adjacency, components, start):
     lengths = [float(np.linalg.norm(points[a]-points[b])) for a, b in edges]
     part_of = {v: i for i, part in enumerate(components) for v in part}
@@ -159,16 +172,30 @@ def _shortest_path(points, edges, adjacency, components, start):
     for i, part in enumerate(components): groups.setdefault(root(i), []).extend(part)
     groups = list(groups.values())
     if len(groups) > 1:
-        tree = [groups[0]]; rest = groups[1:]
-        while rest:
-            best = None
-            for index, other in enumerate(rest):
-                inside = np.vstack([points[g] for g in tree]); members = [v for g in tree for v in g]
-                d = np.linalg.norm(inside[:, None]-points[other][None], axis=2)
-                i, j = np.unravel_index(np.argmin(d), d.shape)
-                if best is None or d[i, j] < best[0]: best = (d[i, j], index, members[i], other[j])
-            _, index, a, b = best
-            extra.append((a, b, None)); extra.append((a, b, None)); tree.append(rest.pop(index))
+        # Prim's tree, keeping each outside group's nearest link to the tree up to date, so
+        # every pair of groups is measured once (O(points²) in all, not O(groups² × points)).
+        members = np.concatenate([np.asarray(g, dtype=int) for g in groups[1:]])
+        owner = np.concatenate([np.full(len(g), k) for k, g in enumerate(groups[1:])])
+        starts = np.r_[0, np.cumsum([len(g) for g in groups[1:]])[:-1]]
+        count = len(groups) - 1
+        best_d = np.full(count, math.inf); best_a = np.zeros(count, dtype=int); best_b = np.zeros(count, dtype=int)
+        alive = np.ones(count, dtype=bool)
+
+        def update(added):
+            # Nearest added vertex for every outside vertex, then each group's nearest pair.
+            d, a = _nearest(np.asarray(added, dtype=int), members, points)
+            group_d = np.minimum.reduceat(d, starts)
+            first = np.flatnonzero(d == group_d[owner])
+            first = first[np.unique(owner[first], return_index=True)[1]]  # Earliest vertex per group.
+            better = (group_d < best_d) & alive
+            best_d[better] = group_d[better]; best_a[better] = a[first][better]; best_b[better] = members[first][better]
+
+        update(groups[0])
+        for _ in range(count):
+            index = int(np.argmin(np.where(alive, best_d, math.inf)))
+            alive[index] = False
+            extra.append((int(best_a[index]), int(best_b[index]), None)); extra.append((int(best_a[index]), int(best_b[index]), None))
+            update(members[owner == index])
     multigraph = {v: list(adjacency[v]) for part in components for v in part}
     jumps = []; next_id = len(edges)
     for a, b, e in extra:

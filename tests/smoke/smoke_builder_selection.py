@@ -10,7 +10,7 @@ from PySide6.QtGui import QKeySequence,QImage,QPainter
 from PySide6.QtTest import QTest
 from phosphor.editor import qt_app as q
 from phosphor.engine.custom_shape import Drawing,Curve
-q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(100)
+q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(100)
 old_clipboard=QMimeData();mime=app.clipboard().mimeData()
 if mime is not None:
     for format in mime.formats():old_clipboard.setData(format,mime.data(format))

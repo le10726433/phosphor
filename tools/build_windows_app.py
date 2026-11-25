@@ -114,9 +114,15 @@ def build():
         '--name', 'phosphor', '--icon', icon,
         '--distpath', DIST, '--workpath', BUILD/'work', '--specpath', BUILD,
         '--paths', HERE, '--add-data', f'{HERE/"phosphor"/"assets"};phosphor/assets',
+        '--add-data', f'{HERE/"docs"/"manual"};docs/manual',
+        '--add-data', f'{HERE/"docs"/"MACOS_DEVELOPMENT.md"};docs',
         # mido picks its backend by name at runtime.
         '--hidden-import', 'mido.backends.rtmidi',
-        # The Tk fallback (app.py --cpu) and the macOS capture helper are not part of the Windows app.
+        '--hidden-import', 'numba',
+        '--hidden-import', 'scipy.signal',
+        '--collect-data', 'soundfile', '--collect-binaries', 'soundfile',
+        '--collect-data', '_soundfile_data', '--collect-binaries', '_soundfile_data',
+        # Nothing uses Tk, and the macOS capture helper is not part of the Windows app.
         '--exclude-module', 'tkinter', '--exclude-module', '_tkinter',
         HERE/'tools'/'packaged_entry.py', cwd=HERE, env=environment)
 

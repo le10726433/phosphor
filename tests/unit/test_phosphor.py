@@ -1,13 +1,106 @@
 """Phosphor presets, energy deposits and preference handling, without Qt or a GPU."""
 import math
 import unittest
-from pathlib import Path
-from phosphor.storage.app_paths import ASSETS_DIR
+from types import SimpleNamespace
+from unittest.mock import Mock
+from phosphor.storage.app_paths import ASSETS_DIR, PACKAGE_DIR
 import numpy as np
 from phosphor.storage.app_files import DEFAULT_PREFERENCES, validated_preferences
 from phosphor.display.phosphor import (ENERGY_SCALE, BEAM_GAUSSIAN, BEAM_HARD, MAX_SIGMA, MIN_SIGMA, PHOSPHORS, PHOSPHOR_OFF, PHOSPHOR_PALETTE, beam_uniforms,
                       SPOT_TRIANGLES, BLOOM_PEAK, bloom_uniforms, PHOSPHOR_CUSTOM, DEFAULT_CUSTOM_PROFILE, afterglow_level_at,
                       decay_preview, phosphor_profile, preset_profile, validated_profile, deposit_vertices, gaussian_beam, new_sample_count, phosphor_uniforms, stroke_deposit)
+from phosphor.display.phosphor import FWHM_TO_SIGMA, REFERENCE_FRAME, frame_gain, spot_deposit, view_scale
+from phosphor.display.frame_step import step_display
+
+
+class DisplayScaleTests(unittest.TestCase):
+    def test_view_scale_uses_logical_short_side_and_clamps_empty_views(self):
+        for size, expected in (((720, 1080), 1.), ((1080, 360), .5),
+                               ((2160, 3840), 3.), ((0, 0), 1/720), ((-10, 20), 1/720)):
+            self.assertEqual(view_scale(*size), expected)
+
+    def test_reference_scale_keeps_legacy_levels_and_gaussian_formula(self):
+        points = np.array([(0., 0.), (2., 0.), (10., 0.)], dtype=np.float32)
+        for strength in (0., .5, 1.):
+            result = stroke_deposit(points, 3., 1., strength, view_scale=1.)
+            expected = np.repeat(np.clip(np.rint(ENERGY_SCALE/np.maximum(np.array([2., 8.], dtype=np.float32), 3.)**strength), 0, 255), 6)
+            np.testing.assert_array_equal(result['r'], expected)
+            np.testing.assert_array_equal(result, stroke_deposit(points, 3., 1., strength))
+            for ratio in (1., 1.5, 2.):
+                thickness = 6.
+                core = min(thickness, max(min(thickness, 1.), thickness*ENERGY_SCALE/(255*max(thickness, .5)**strength)))
+                target = min(8., max(1., thickness*ratio*FWHM_TO_SIGMA))
+                sigma = max(1., math.sqrt(max(0., target**2-(core*ratio)**2/12)))
+                self.assertEqual(gaussian_beam(thickness, ratio, strength, view_scale=1.), (core, sigma))
+        held = np.zeros((3, 2))
+        spot = spot_deposit(held, np.zeros(2), 4., 1., view_scale=1.)
+        self.assertEqual(set(spot['r']), {round(2*ENERGY_SCALE/4.)})
+
+    def test_reference_figure_has_identical_moving_and_spot_levels(self):
+        points = np.array([(0., 0.), (2., 0.), (10., 0.), (10., 0.)])
+        for strength in (0., .5, 1.):
+            baseline = deposit_vertices(points, 4., strength)
+            for s in (.5, 1., 3.):
+                actual = deposit_vertices(points*s, 4.*s, strength, view_scale=s)
+                np.testing.assert_array_equal(actual['r'], baseline['r'])
+                np.testing.assert_allclose(actual['x']/s, baseline['x'], atol=1e-5)
+                np.testing.assert_allclose(actual['y']/s, baseline['y'], atol=1e-5)
+                spots = spot_deposit(np.zeros((3, 2)), np.zeros(2), 4.*s, 1., view_scale=s)
+                self.assertEqual(set(spots['r']), {75})
+
+    def test_gaussian_core_and_unclamped_sigma_follow_scale_and_dpr(self):
+        core, sigma = gaussian_beam(6., 1.)
+        for s in (.5, 1., 3.):
+            for ratio in (1., 2.):
+                actual_core, actual_sigma = gaussian_beam(6.*s, ratio, view_scale=s)
+                self.assertAlmostEqual(actual_core, core*s)
+                self.assertAlmostEqual(actual_sigma, sigma*s*ratio)
+                self.assertGreater(actual_sigma, MIN_SIGMA)
+                self.assertLess(actual_sigma, MAX_SIGMA)
+
+    def test_thin_hard_edge_preserves_energy_when_floored_to_one_pixel(self):
+        points = [(0., 0.), (20., 0.)]
+        for ratio in (1., 2.):
+            true_width = .25
+            width = max(true_width, 1/ratio)
+            actual = stroke_deposit(points, width, 1., 0., energy_width=true_width, view_scale=.5)
+            self.assertAlmostEqual(float(actual['r'][0])*width, ENERGY_SCALE*true_width, delta=.5)
+
+    def test_bloom_gain_and_shader_radius_at_large_scales(self):
+        source = (ASSETS_DIR/'shaders'/'phosphor_bloom_blur.frag').read_text(encoding='utf-8')
+        self.assertIn('MAX_RADIUS = 32', source)
+        for ratio in (1., 2.):
+            baseline = bloom_uniforms(True, 3., 24., 1.5, ratio, 720, 720)
+            for s in (.5, 1., 3., 6.):
+                u = bloom_uniforms(True, 3.*s, 24.*s, 1.5, ratio, 720*s, 720*s, view_scale=s)
+                self.assertEqual(u['bloomGain'], baseline['bloomGain'])
+                self.assertLessEqual(3*u['bloomSigma'], 32)
+                if s == 1.:
+                    self.assertEqual(u, baseline)
+
+    def test_reference_noise_coordinates_and_plain_float_uniform_plumbing(self):
+        source = (PACKAGE_DIR/'display'/'qt_phosphor.py').read_text(encoding='utf-8')
+        self.assertEqual(source.count('Qt.vector2d(root.width/root.viewScale, root.height/root.viewScale)'), 2)
+        self.assertIn('property real viewScale: 1', source)
+
+    def test_frame_step_uses_scope_size_and_preserves_thin_hard_edge_energy(self):
+        points = np.array([(0., 0.), (10., 0.)])
+        scope = SimpleNamespace(width=lambda: 360., height=lambda: 900., screen_points=lambda: points)
+        # Deliberately unrelated window dimensions: the scope determines the scale.
+        view = SimpleNamespace(width=lambda: 1200., height=lambda: 1500., devicePixelRatio=lambda: 1.)
+        layer = Mock()
+        host = SimpleNamespace(scope=scope, view=view, phosphor=layer)
+        prefs = dict(DEFAULT_PREFERENCES, phosphor=PHOSPHOR_PALETTE, beam_profile=BEAM_HARD,
+                     trace_thickness=.5, trace_interpolation='Off')
+        step_display(host, prefs, points, 1, .016)
+        vertices, uniforms = layer.step.call_args.args
+        self.assertEqual(uniforms['viewScale'], .5)
+        self.assertFalse(uniforms['gaussian'])
+        self.assertEqual(uniforms['energyTexel'], (1/360, 1/900))
+        self.assertEqual(float(vertices['y'].max()-vertices['y'].min()), 1.)
+        expected = stroke_deposit(points, 1., 1., prefs['beam_brightness'],
+                                  spot_width=.25, energy_width=.25, view_scale=.5)
+        np.testing.assert_array_equal(vertices, expected)
 
 
 class DepositTests(unittest.TestCase):
@@ -80,7 +173,7 @@ class PresetTests(unittest.TestCase):
                 continue
             u = phosphor_uniforms(phosphor_profile(name, '#ff8000', DEFAULT_CUSTOM_PROFILE), .016, 2.)
             self.assertAlmostEqual(u['slowKeep'], math.exp(-.016/preset['slow']))
-            self.assertAlmostEqual(u['slowGain'], preset['slow_gain']*min(1., .05/preset['slow']))
+            self.assertAlmostEqual(u['afterglowGain'], preset['slow_gain']*min(1., .05/preset['slow']))
             np.testing.assert_allclose(u['fastColor'], preset.get('fast_color', (1., 128/255, 0.)), atol=1/255)
             np.testing.assert_allclose(u['slowColor'], preset.get('slow_color', (1., 128/255, 0.)), atol=1/255)
             self.assertEqual(u['exposure'], 2*phosphor_uniforms(phosphor_profile(name, '#ff8000', None), .016, 1.)['exposure'])
@@ -261,9 +354,76 @@ class PresetTests(unittest.TestCase):
 
 
 class DisplayChainTests(unittest.TestCase):
+    def test_reference_frame_is_exact_and_zero_keeps_legacy_step(self):
+        for tau in (.001, .008, .015, .02, .05, .12, .7, 5.):
+            self.assertEqual(frame_gain(REFERENCE_FRAME, tau), 1.)
+            self.assertEqual(frame_gain(0., tau), 1.)
+            self.assertEqual(frame_gain(-1., tau), 1.)
+        for name, preset in PHOSPHORS.items():
+            if preset is None: continue
+            profile = preset_profile(name, '#00ff00')
+            for elapsed in (REFERENCE_FRAME, 0.):
+                u = phosphor_uniforms(profile, elapsed, 1.)
+                for key in ('fastGain', 'slowGain', 'stepScale', 'shimmerScale'):
+                    self.assertEqual(u[key], 1., (name, elapsed, key))
+
+    def test_display_rate_preferences_default_round_trip_and_validation(self):
+        old = {k: v for k, v in DEFAULT_PREFERENCES.items() if k != 'display_rate'}
+        self.assertEqual(validated_preferences(old)['display_rate'], 'Match monitor')
+        for rate in ('Match monitor', '60 Hz'):
+            chosen = dict(DEFAULT_PREFERENCES, display_rate=rate)
+            self.assertEqual(validated_preferences(chosen), chosen)
+        for rate in ('144 Hz', None, 60, []):
+            with self.assertRaises(ValueError):
+                validated_preferences(dict(DEFAULT_PREFERENCES, display_rate=rate))
+
+    def test_integrated_light_across_refresh_rates(self):
+        """Post-deposit sample-and-hold light, including the shader's tail floor.
+
+        Deliberately tests light rather than only energy: the exponential tone map
+        can expose limits of the analytical energy correction on single passes.
+        """
+        intervals = {'60': [REFERENCE_FRAME], '120': [1/120], '144': [1/144],
+                     '240': [1/240], 'jitter': [1/90, 1/165, 1/110, 1/144]}
+
+        def integrate(profile, intensity, sequence, single):
+            energy = np.zeros(2)
+            total = np.zeros(3)
+            colors = np.array([profile['flash_color'], profile['afterglow_color']])
+            colors = np.array([[int(c[j:j+2], 16)/255 for j in (1, 3, 5)] for c in colors])
+            elapsed = 0.; index = 0
+            while elapsed < .5-1e-12:
+                dt = min(sequence[index % len(sequence)], .5-elapsed)
+                u = phosphor_uniforms(profile, dt, intensity)
+                deposit = (.5 if index == 0 else 0.) if single else 3.*dt
+                energy = np.maximum(0., energy*np.array([u['fastKeep'], u['slowKeep']])
+                    + deposit*np.array([u['fastGain'], u['slowGain']])
+                    - (64/65025)*u['stepScale'])
+                weighted = energy*np.array([1., u['afterglowGain']])
+                light = (1-np.exp(-weighted*u['exposure'])) @ colors
+                hot = 1-np.exp(-weighted.sum()*u['exposure']*.08)
+                light = np.minimum(light+(1-light)*(.7*hot*hot), 1.)
+                total += light*dt
+                elapsed += dt; index += 1
+            return total.sum()
+
+        for name, preset in PHOSPHORS.items():
+            if preset is None: continue
+            profile = preset_profile(name, '#00ff00')
+            for intensity in (1., 5.):
+                for single in (False, True):
+                    reference = integrate(profile, intensity, intervals['60'], single)
+                    for rate, sequence in intervals.items():
+                        with self.subTest(profile=name, intensity=intensity, single=single, rate=rate):
+                            value = integrate(profile, intensity, sequence, single)
+                            # A single pass on irregular frames gets its gain from one frame's
+                            # length while the following frames differ: about 4% on VRR.
+                            tolerance = .05 if single and rate == 'jitter' else .03
+                            self.assertAlmostEqual(value/reference, 1., delta=tolerance)
+
     def test_feedback_never_uses_a_recursive_layer(self):
         # Resizing a recursive ShaderEffectSource crashes Qt 6.10.3 on Direct3D 11.
-        source = (Path(__file__).resolve().parents[2]/'phosphor'/'display'/'qt_phosphor.py').read_text(encoding='utf-8')
+        source = (PACKAGE_DIR/'display'/'qt_phosphor.py').read_text(encoding='utf-8')
         self.assertNotIn('recursive: true', source)
         self.assertIn('energyCopy.scheduleUpdate()', source)
 

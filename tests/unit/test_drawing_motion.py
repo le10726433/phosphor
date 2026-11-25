@@ -2,11 +2,13 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
+from phosphor.engine.drawing_motion import render_components
 import numpy as np
 from phosphor.engine.custom_shape import Drawing,Curve,CUSTOM_OBJECT
 from phosphor.engine.drawing_motion import set_role,assign,reconcile,remove_assignment
 from phosphor.engine.signal_engine import Shape,Settings,builder_motion_parts,render,validate
 from phosphor.storage.app_files import scene_document,read_scene,atomic_json
+from phosphor.storage.app_files import SCENE_VERSION
 
 class DrawingMotionTests(unittest.TestCase):
     def fixture(self,follow=False):
@@ -17,6 +19,18 @@ class DrawingMotionTests(unittest.TestCase):
     def points(self,d,t,size=1.,rotation=0.):
         shape=Shape(solid=CUSTOM_OBJECT,custom=d,shape_size=size,rotation_z=rotation)
         return [p+c for p,c,r,e in builder_motion_parts(shape,0,t)]
+
+    def test_component_routes_are_planned_once_and_match_a_fresh_plan(self):
+        from phosphor.engine.signal_engine import planned_components
+        from phosphor.engine.route_plan import ROUTE_MODES, plan_route
+        d=self.fixture();shape=Shape(solid=CUSTOM_OBJECT,custom=d)
+        for mode in ROUTE_MODES:
+            planned_components.cache_clear()
+            for t in (0.,.3,.7):builder_motion_parts(shape,t,t,mode)
+            self.assertEqual(planned_components.cache_info().misses,1)  # Not per frame.
+            for (v,e,r,_),part in zip(render_components(d),builder_motion_parts(shape,.5,.5,mode)):
+                expected=r if mode==ROUTE_MODES[0] else plan_route(v,[tuple(x) for x in e],r,mode)[0]
+                np.testing.assert_array_equal(part[2],expected)
 
     def test_assignment_has_no_position_jump_and_preserves_offset(self):
         for follow in (False,True):
@@ -66,7 +80,7 @@ class DrawingMotionTests(unittest.TestCase):
         pasted.validate();self.assertEqual(len(pasted.attachments),2)
         self.assertFalse(d.subset({1,2},keep_motion=True).attachments) # no dangling external guide in copied data
         settings=replace(Settings(),shapes=(Shape(solid=CUSTOM_OBJECT,custom=d),))
-        document=scene_document(settings,'drawing','');self.assertEqual(document['version'],10)
+        document=scene_document(settings,'drawing','');self.assertEqual(document['version'], SCENE_VERSION)
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'assembly.json';atomic_json(path,document);loaded,_,_=read_scene(path)
         self.assertEqual(loaded.shapes,settings.shapes)

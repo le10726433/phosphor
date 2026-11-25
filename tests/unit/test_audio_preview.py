@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from phosphor.audio.audio_preview import AudioPreview, DEFAULT_RATE, device_rate, live_block_frames
+from phosphor.audio.audio_preview import AudioPreview, DEFAULT_RATE, device_rate, live_block_frames, playback_block_frames
 from phosphor.engine.signal_engine import Settings, render
 
 # Tests patch sys.platform; load PortAudio now so it resolves for the real platform.
@@ -48,7 +48,8 @@ class PreviewTests(unittest.TestCase):
         self.assertNotIn('callback',opened[1][1])
         self.assertEqual(player.output_mode,'WASAPI shared')
         player,opened=self.windows_start({'WASAPI exclusive','WASAPI shared'})
-        self.assertEqual((player.output_mode,player.block_frames),('System default',512))
+        # The system default fallback uses the 10 ms playback block (P7c; was 512 frames).
+        self.assertEqual((player.output_mode,player.block_frames),('System default',playback_block_frames(player.sample_rate)))
         self.assertEqual(opened[-1][1]['latency'],.03)
         with self.assertRaises(RuntimeError):
             self.windows_start({'WASAPI exclusive','WASAPI shared','System default'})
@@ -170,7 +171,7 @@ class PreviewTests(unittest.TestCase):
         from unittest.mock import patch
         with patch('phosphor.audio.audio_preview.device_rate', return_value=44100) as rate:
             player, opened = self.windows_start()
-        self.assertEqual(rate.call_args.args[1], 28)
+        self.assertEqual(rate.call_args_list[0].args[1], 28)
         self.assertEqual(opened[0][1]['samplerate'], 44100)
         self.assertEqual(player.sample_rate, 44100)
 
@@ -178,9 +179,10 @@ class PreviewTests(unittest.TestCase):
         from dataclasses import replace
         from unittest.mock import patch
         from phosphor.audio.midi_synth import MIDI_SOURCE
-        for platform,source,frames,latency in (('darwin',Settings().source,512,.1),('win32',Settings().source,512,.1)):
+        for platform,source,frames,latency in (('darwin',Settings().source,480,.1),('win32',Settings().source,480,.1)):
             player=AudioPreview()
-            with patch('phosphor.audio.audio_preview.sys.platform',platform),patch('sounddevice.OutputStream') as output,patch.object(player,'_run'):
+            with patch('phosphor.audio.audio_preview.sys.platform',platform),patch('sounddevice.OutputStream') as output,patch.object(player,'_run'),\
+                    patch('phosphor.audio.audio_preview.device_rate',return_value=48000):
                 output.return_value.latency=.012
                 player.start(replace(Settings(),source=source),'mixed')
                 player.thread.join(timeout=1)
@@ -218,7 +220,8 @@ class PreviewTests(unittest.TestCase):
         from phosphor.audio.midi_synth import MIDI_SOURCE
         player=AudioPreview();player.live=True;player.block_frames=128
         player.history=__import__('collections').deque(maxlen=16)
-        player.parameters=(replace(Settings(),source=MIDI_SOURCE),'drawing')
+        from phosphor.engine.signal_engine import Shape
+        player.parameters=(replace(Settings(),source=MIDI_SOURCE,shapes=(Shape(),)),'drawing')
         player.midi.reset(48000)
         blocks=[]
         class Stream:
@@ -272,14 +275,101 @@ class PreviewTests(unittest.TestCase):
         # Device and synthesis blocks must both fit within a 60 Hz frame interval;
         # a timer alone cannot animate fresh submitted samples any faster.
         from unittest.mock import patch
+        for rate in (44100, 48000, 88200, 96000, 176400, 192000):
+            player = AudioPreview()
+            with patch('sounddevice.OutputStream') as output, patch.object(player, '_run'), \
+                    patch('phosphor.audio.audio_preview.device_rate', return_value=rate):
+                player.start(Settings(), 'mixed')
+                player.thread.join(timeout=1)
+                self.assertEqual(output.call_args.kwargs['blocksize'], player.block_frames)
+                self.assertLess(player.block_frames / rate, 1 / 60)
+            # The retained blocks must still hold the entire 40 ms scope window.
+            self.assertGreaterEqual(player.history.maxlen * player.block_frames, .04 * rate)
+
+    def test_playback_blocks_are_10_ms_at_every_rate(self):
+        self.assertEqual([playback_block_frames(rate) for rate in (44100, 48000, 88200, 96000, 176400, 192000)],
+                         [441, 480, 882, 960, 1764, 1920])
+        self.assertEqual(playback_block_frames(8000), 80)
+
+    def test_output_rate_preference_opens_at_the_requested_rate(self):
+        from phosphor.audio.simulated_output import SimulatedDevice
+        from unittest.mock import patch
         player = AudioPreview()
-        with patch('sounddevice.OutputStream') as output, patch.object(player, '_run'):
+        player.device = SimulatedDevice(96000, rates=(48000, 96000, 192000))
+        player.requested_rate = 192000
+        self.assertEqual(player.expected_rate(), 192000)
+        with patch.object(player, '_run'):
             player.start(Settings(), 'mixed')
             player.thread.join(timeout=1)
-            self.assertEqual(output.call_args.kwargs['blocksize'], player.BLOCK_FRAMES)
-            self.assertLess(player.BLOCK_FRAMES / 48000, 1 / 60)
-        # Five retained blocks must still hold the entire 40 ms scope window.
-        self.assertGreaterEqual(player.history.maxlen * player.BLOCK_FRAMES, 1920)
+        stream = player.device.streams[-1]
+        self.assertEqual((player.sample_rate, stream.samplerate, stream.blocksize, player.block_frames), (192000, 192000, 1920, 1920))
+        self.assertEqual(player.parameters[0].sample_rate, 192000)
+        self.assertEqual(player.rate_notice, '')
+
+    def test_output_rate_falls_back_to_the_device_rate_and_says_so(self):
+        from phosphor.audio.simulated_output import SimulatedDevice
+        from phosphor.engine.composition import Project
+        from unittest.mock import patch
+        player = AudioPreview()
+        player.device = SimulatedDevice(96000)  # Refuses every other rate, like an exclusive device.
+        player.requested_rate = 192000
+        project = Project()
+        player.composer = (project, .25)
+        with patch.object(player, '_run'), patch('phosphor.audio.audio_preview.audio_clips.prime') as prime:
+            player.start(Settings(), 'mixed')
+            player.thread.join(timeout=1)
+        prime.assert_called_once_with(project, 96000, .25)
+        self.assertEqual([s.samplerate for s in player.device.streams], [96000])  # 192 kHz refused before opening.
+        self.assertEqual((player.sample_rate, player.block_frames), (96000, 960))
+        self.assertIn('192 kHz is not available', player.rate_notice)
+        self.assertIn('96 kHz', player.rate_notice)
+        # Follow device clears the notice on the next start.
+        player.requested_rate = 0
+        with patch.object(player, '_run'):
+            player.start(Settings(), 'mixed')
+            player.thread.join(timeout=1)
+        self.assertEqual((player.sample_rate, player.rate_notice), (96000, ''))
+
+    def test_live_midi_prefers_low_latency_at_the_device_rate_over_the_requested_rate(self):
+        from dataclasses import replace
+        from phosphor.audio.midi_synth import MIDI_SOURCE
+        from phosphor.audio.simulated_output import SimulatedDevice
+        from unittest.mock import patch
+        player = AudioPreview()
+        device = SimulatedDevice(48000)
+        opened = []
+        def output(**options):
+            opened.append((options.get('callback') is not None, options['samplerate']))
+            return SimulatedDevice.OutputStream(device, **options)
+        device_module = SimulatedDevice(48000); device_module.OutputStream = output
+        player.device = device_module
+        player.requested_rate = 96000
+        with patch('phosphor.audio.audio_preview.sys.platform', 'darwin'), patch.object(player, '_wait_for_callback_stream'):
+            player.start(replace(Settings(), source=MIDI_SOURCE), 'mixed')
+            player.thread.join(timeout=1)
+        # 96 kHz refused on the callback profile, then the callback profile at 48 kHz (not blocking at 96).
+        self.assertEqual(opened, [(True, 96000), (True, 48000)])
+        self.assertEqual((player.output_mode, player.sample_rate, player.block_frames), ('Core Audio callback', 48000, 128))
+        self.assertTrue(player.rate_notice)
+        player.stop_event.set()
+        for stream in device.streams: stream.close()
+
+    def test_buffered_seconds_drains_between_blocking_writes(self):
+        from unittest.mock import patch
+        player = AudioPreview()
+        player.output_latency, player.sample_rate = .1, 48000
+        with patch.object(AudioPreview, 'running', True):
+            player._full_at = (100., 4800)
+            player.frames = 4800
+            with patch('phosphor.audio.audio_preview.time.perf_counter', return_value=100.03):
+                self.assertAlmostEqual(player.buffered_seconds(), .07)
+                player.frames = 4800 + 480  # One 10 ms block written since.
+                self.assertAlmostEqual(player.buffered_seconds(), .08)
+            with patch('phosphor.audio.audio_preview.time.perf_counter', return_value=101.):
+                self.assertEqual(player.buffered_seconds(), 0.)
+            player.live = True
+            self.assertIsNone(player.buffered_seconds())
+        self.assertIsNone(AudioPreview().buffered_seconds())  # Not playing.
 
     def test_device_failure_is_reported_and_closed(self):
         player = AudioPreview()

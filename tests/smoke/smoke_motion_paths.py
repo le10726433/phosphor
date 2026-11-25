@@ -1,5 +1,7 @@
 """Native/--headless Circle, motion conversion, rigid assignment and restart."""
 import _path  # noqa: F401  (makes the phosphor package importable)
+from _screen import check_size,exit_cleanly_on_failure
+exit_cleanly_on_failure()
 import os,sys,time,tempfile
 from dataclasses import replace
 if '--headless' in sys.argv:os.environ['QT_QPA_PLATFORM']='offscreen'
@@ -16,7 +18,8 @@ from phosphor.engine.custom_shape import Drawing,Curve
 from phosphor.engine.signal_engine import posed_shapes,is_motion_guide,validate
 from phosphor.storage.app_files import read_scene
 from phosphor.editor.shape_builder import DRAW_WIDTH,BOX_WIDTH
-q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None));w.show();QTest.qWait(100)
+q.configure_graphics();app=QApplication([]);w=q.Window(SimpleNamespace(scene=None,ready_file=None,workspace='Sandbox'));w.show();QTest.qWait(100)
+w.add_object('Tilting circle');w.scene.saved=w.scene.document()  # New scenes are empty; start from one circle.
 assert w.scene.shape.solid=='Tilting circle' and not (w.scene.shape.spin_x or w.scene.shape.spin_y or w.scene.shape.spin_z)
 w.open_builder();QTest.qWait(100);b=w.builder
 def click(point):QTest.mouseClick(b.view,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier,QPoint(*map(round,b.canvas.pixel(point))))
@@ -25,7 +28,7 @@ assert len(b.drawing.curves)==1 and b.drawing.curves[0].kind=='Circle' and b.rad
 b.radius.setValue(.4);b.edit_radius()
 positions=np.array([n[1:] for n in b.drawing.nodes]);assert abs(np.linalg.norm(positions[1]-positions[0])-.4)<1e-9
 for width,height in ((1000,700),(1220,840)):
-    w.resize(width,height);QTest.qWait(50);assert (w.width(),w.height())==(width,height),(w.size(),width,height)
+    w.resize(width,height);QTest.qWait(50);check_size(w,width,height)
 assert BOX_WIDTH==DRAW_WIDTH/2
 b.canvas.update();QTest.qWait(100)
 if '--headless' not in sys.argv:

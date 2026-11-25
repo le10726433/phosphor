@@ -32,7 +32,7 @@ def child(case):
             QTimer.singleShot(300, QApplication.quit if case == 'application quit' else self.close)
 
     q.Window = Scripted
-    sys.argv = ['app.py']
+    sys.argv = ['app.py', '--workspace', 'Sandbox']
     return q.main()
 
 

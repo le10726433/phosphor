@@ -38,7 +38,7 @@ class CornerDwellTests(unittest.TestCase):
         from tests.unit.test_score_source import write_midi
         folder=tempfile.TemporaryDirectory(); self.addCleanup(folder.cleanup)
         tune=write_midi(Path(folder.name)/'tune.mid')
-        for source in ('C-major scale','MIDI file'):
+        for source in ('Scale','MIDI file','Single tone'):
             base=Settings(source=source,midi_file=tune,shapes=(Shape('Square (2D)'),))
             dwell=replace(base,corner_dwell_us=80.)
             full=render(times,dwell)
@@ -56,7 +56,7 @@ class CornerDwellTests(unittest.TestCase):
         mido=mido_module();times=np.arange(4096)/48000
         a,b=MidiSynth(),MidiSynth()
         for synth in (a,b):synth.handle(mido.Message('note_on',note=69,velocity=100))
-        base=Settings();dwell=replace(base,corner_dwell_us=80.)
+        base=Settings(shapes=(Shape(),));dwell=replace(base,corner_dwell_us=80.)
         first=a.render(times,base);second=b.render(times,dwell)
         np.testing.assert_array_equal(first[1],second[1])
         self.assertEqual(a.voices[0].phase,b.voices[0].phase)

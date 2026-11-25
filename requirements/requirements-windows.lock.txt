@@ -1,0 +1,33 @@
+# Windows development environment as installed and validated on November 20, 2026
+# (0.74.0-dev, Ops-0; audit B9). Python 3.12.4 (64-bit, python.org build).
+#
+# This records what the Windows checks run against; it changes nothing that is installed.
+# The Mac pins differ on purpose for now (requirements-macos.lock.txt: NumPy 2.5.4,
+# SciPy 1.16.3). Moving Windows to NumPy 2.x waits for a golden-audio run on the Mac.
+#
+# Where each package lives today:
+# - system Python site-packages: numpy, numba, llvmlite, scipy, soundfile, pillow, cffi,
+#   pycparser, packaging;
+# - .qt-deps: pyside6, pyside6-addons, pyside6-essentials, shiboken6;
+# - .audio-deps: sounddevice, mido, python-rtmidi, pyaudiowpatch.
+#   It also holds cffi 2.1.1, pycparser 3.12 and packaging 26.3, but phosphor/__init__.py
+#   appends the folder to sys.path, so the system copies pinned below are the ones imported.
+#
+# Reproduce in a fresh environment: python -m pip install -r requirements/requirements-windows.lock.txt
+numpy==1.26.4
+numba==0.68.1
+llvmlite==0.50.0
+scipy==1.14.0
+soundfile==0.12.1
+pillow==10.4.0
+cffi==1.16.0
+pycparser==2.22
+packaging==24.1
+pyside6==6.10.3
+pyside6-addons==6.10.3
+pyside6-essentials==6.10.3
+shiboken6==6.10.3
+sounddevice==0.5.6
+mido==1.3.3
+python-rtmidi==1.5.8
+pyaudiowpatch==0.2.12.9

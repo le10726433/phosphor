@@ -1,0 +1,97 @@
+{
+  "header": {
+    "platform": "Windows-11-10.0.26300-SP0",
+    "cpu_count": 32,
+    "python": "3.12.4",
+    "numpy": "1.26.4",
+    "pyside6": "6.10.3",
+    "graphics_api": "GraphicsApi.Direct3D11",
+    "numba": "0.68.1"
+  },
+  "model_import": {
+    "dense_model_from_obj": 46.912100006011315,
+    "dense_model_route": 78.18669998960104
+  },
+  "model_engine": {
+    "none_scene_plan_per_frame": 0.40105333318933845,
+    "none_render_1s": 43.001700003515,
+    "spin_perspective_scene_plan_per_frame": 0.44585333331876126,
+    "spin_perspective_render_1s": 45.340199998463504,
+    "spin_motion_expression_scene_plan_per_frame": 1.5269800001988187,
+    "spin_motion_expression_render_1s": 109.47260000102688
+  },
+  "editor_model": {
+    "add_model": 188.12209999305196,
+    "stopped_display_frame_median": 1.63050000264775,
+    "stopped_display_frame_p90": 2.4714299899642365,
+    "transform_edit_and_frame_median": 5.773550001322292,
+    "transform_edit_and_frame_p90": 6.49746000271989
+  },
+  "audio_under_edit": {
+    "idle_block_render_median": 1.3190000026952475,
+    "idle_block_render_p90": 1.860599993960932,
+    "idle_block_render_max": 4.1840999911073595,
+    "idle_late_writes": 0,
+    "idle_worst_lateness": 0.0,
+    "editing_block_render_median": 1.6567499988013878,
+    "editing_block_render_p90": 3.0216300045140088,
+    "editing_block_render_max": 5.279300006804988,
+    "editing_late_writes": 0,
+    "editing_worst_lateness": 0.0
+  },
+  "recurrence": {
+    "lorenz_static_evaluate_per_pose": 6.352540000079898,
+    "lorenz_static_render_1s": 60.97050000971649,
+    "lorenz_dynamic_first_compile": 1322.656400006963,
+    "lorenz_dynamic_interpreter_per_pose": 5.847384999651695,
+    "lorenz_dynamic_evaluate_per_pose": 0.051389999862294644,
+    "lorenz_dynamic_render_1s": 56.98829999892041,
+    "clifford_dynamic_first_compile": 270.4514999932144,
+    "clifford_dynamic_interpreter_per_pose": 6.517049999820301,
+    "clifford_dynamic_evaluate_per_pose": 0.14341499991132878,
+    "clifford_dynamic_render_1s": 62.8123000060441,
+    "order8_first_compile": 300.96860000048764,
+    "order8_interpreter_per_pose": 9.49968999993871,
+    "order8_evaluate_per_pose": 0.13112500018905848,
+    "order8_render_1s": 58.441200002562255
+  },
+  "song_audio": {
+    "compute_per_audio_second": 0.08463313000102062
+  },
+  "export_render": {
+    "1920x1080_frame_median": 6.362200001603924,
+    "1920x1080_bytes_median": 1.0900999914156273,
+    "3840x2160_frame_median": 19.076299999142066,
+    "3840x2160_bytes_median": 4.372399998828769
+  },
+  "export_encode": {
+    "1920x1080_libx264": 172.23364067584703,
+    "1920x1080_h264_nvenc": 212.0068676059956,
+    "1920x1080_hevc_nvenc": 226.9868442185551,
+    "1920x1080_h264_amf": "unavailable",
+    "1920x1080_h264_amf_detail": "Conversion failed!",
+    "1920x1080_h264_qsv": "unavailable",
+    "1920x1080_h264_qsv_detail": "Conversion failed!",
+    "1920x1080_h264_videotoolbox": "unavailable",
+    "1920x1080_h264_videotoolbox_detail": "Error opening output files: Encoder not found",
+    "1920x1080_hevc_videotoolbox": "unavailable",
+    "1920x1080_hevc_videotoolbox_detail": "Error opening output files: Encoder not found",
+    "3840x2160_libx264": 52.010263878838366,
+    "3840x2160_h264_nvenc": 69.66407576322644,
+    "3840x2160_hevc_nvenc": 70.77531526836191,
+    "3840x2160_h264_amf": "unavailable",
+    "3840x2160_h264_amf_detail": "Conversion failed!",
+    "3840x2160_h264_qsv": "unavailable",
+    "3840x2160_h264_qsv_detail": "Conversion failed!",
+    "3840x2160_h264_videotoolbox": "unavailable",
+    "3840x2160_h264_videotoolbox_detail": "Error opening output files: Encoder not found",
+    "3840x2160_hevc_videotoolbox": "unavailable",
+    "3840x2160_hevc_videotoolbox_detail": "Error opening output files: Encoder not found"
+  },
+  "export_end_to_end": {
+    "1920x1080_wall": 2.993979800012312,
+    "1920x1080_wall_per_video_second": 0.9979932666707706,
+    "3840x2160_wall": 8.770669400008046,
+    "3840x2160_wall_per_video_second": 2.9235564666693485
+  }
+}

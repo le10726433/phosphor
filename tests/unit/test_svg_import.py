@@ -9,6 +9,7 @@ from phosphor.editor.qt_scene import Scene
 from phosphor.engine.scene_path import connector_segments
 from phosphor.engine.signal_engine import Settings, Shape, planned_path, projected_solid, validate
 from phosphor.engine.svg_import import drawing_from_svg, load_svg, parse_path, parse_svg, simplify
+from phosphor.storage.app_files import SCENE_VERSION
 
 NS = 'xmlns="http://www.w3.org/2000/svg"'
 
@@ -89,19 +90,21 @@ class SimplifyTests(unittest.TestCase):
         theta = np.linspace(0, 2*np.pi, 200, endpoint=False)
         self.assertGreater(len(simplify(np.column_stack((np.cos(theta), np.sin(theta))), True, .01)), 8)
 
-    def test_dense_art_fits_the_custom_shape_limits(self):
+    def test_dense_art_is_kept_without_visible_simplification(self):
         theta = np.linspace(0, 2*np.pi, 5000)
         wave = ' '.join(f'{np.cos(t)*(100+9*np.sin(40*t)):.3f},{np.sin(t)*(100+9*np.sin(40*t)):.3f}' for t in theta)
         drawing, report = drawing_from_svg(svg(f'<polygon points="{wave}"/>'))
         self.assertLessEqual(len(drawing.nodes), MAX_NODES)
         self.assertLessEqual(len(drawing.edges), MAX_EDGES)
-        self.assertTrue(report.simplified)
+        self.assertGreater(len(drawing.nodes), 500)  # Was cut to 128 nodes before 0.38.0-dev; now only collinear points go.
+        self.assertFalse(report.simplified)
 
-    def test_many_tiny_parts_report_what_was_dropped(self):
+    def test_many_tiny_parts_are_all_kept(self):
         body = '<rect width="1000" height="1000"/>'+''.join(f'<circle cx="{(i % 30)*33}" cy="{(i//30)*33}" r="1"/>' for i in range(300))
         drawing, report = drawing_from_svg(svg(body))
         self.assertLessEqual(len(drawing.nodes), MAX_NODES)
-        self.assertGreater(report.dropped, 0)
+        self.assertEqual(report.dropped, 0)
+        self.assertEqual(report.subpaths, 301)
 
 
 class ConnectorTests(unittest.TestCase):
@@ -119,7 +122,7 @@ class ConnectorTests(unittest.TestCase):
     def test_scene_adds_an_editable_shape(self):
         scene = Scene()
         scene.add_drawing(drawing_from_svg(svg('<line x2="5"/>'), 'mark')[0])
-        self.assertEqual((scene.shape.solid, scene.shape.custom.name, scene.selected), (CUSTOM_OBJECT, 'mark', 1))
+        self.assertEqual((scene.shape.solid, scene.shape.custom.name, scene.selected), (CUSTOM_OBJECT, 'mark', 0))
 
 
 class SpinTests(unittest.TestCase):
@@ -155,11 +158,11 @@ class SpinTests(unittest.TestCase):
                 validate(Settings(shapes=(Shape(spin_y=value),)))
 
     def test_scene_storage_only_changes_when_spin_is_used(self):
-        self.assertEqual(scene_document(Settings(), 'mixed', '')['version'], 10)
+        self.assertEqual(scene_document(Settings(), 'mixed', '')['version'], SCENE_VERSION)
         self.assertNotIn('spin_x', scene_document(Settings(shapes=(Shape(),)), 'mixed', '')['shapes'][0])
         settings = Settings(shapes=(Shape(spin_z=2.5),))
         document = scene_document(settings, 'mixed', '')
-        self.assertEqual(document['version'], 10)
+        self.assertEqual(document['version'], SCENE_VERSION)
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'spin.json'
             atomic_json(path, document)

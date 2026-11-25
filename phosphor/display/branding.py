@@ -1,4 +1,5 @@
 """Shared palette artwork; paths and scene identifiers remain backward compatible."""
+from phosphor.display.crt_theme import MACOS_GRAPHITE
 from phosphor.storage.app_paths import ASSETS_DIR
 
 APP_NAME = 'phosphor'
@@ -7,6 +8,7 @@ LOGOS = {
     'Amber': 'logo_amber.png',
     'Cyan': 'logo_cyan.png',
     'OLED white': 'logo_white.png',
+    MACOS_GRAPHITE: 'logo_white.png',
 }
 
 def logo_path(palette):

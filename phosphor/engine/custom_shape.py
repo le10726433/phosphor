@@ -10,7 +10,10 @@ from phosphor.engine.stroke_style import Style,validate_styles,bold_outline,corn
 from phosphor.engine.vector_text import GLYPHS,validate_text
 
 CUSTOM_OBJECT = 'Custom shape'
-MAX_NODES, MAX_EDGES = 128, 256
+# Safety limits only (0.38.0-dev): detail is no longer budgeted to one clean pass, since an
+# object's Path Trace can draw part of it. More detail means a dimmer, slower trace.
+MAX_NODES, MAX_EDGES = 16384, 32768
+MAX_DRAWING_POINTS = 65536  # Straight segments plus flattened curve points in one drawing.
 
 @dataclass(frozen=True)
 class Curve:
@@ -35,6 +38,24 @@ class Drawing:
     guides: tuple = ()
     attachments: tuple = ()
     styles: tuple = ()  # Style: bold outline width / extrude depth per connected shape
+
+    # 0.73.0-dev (audit P6): every audio block looks a drawing up in several lru caches
+    # (validate_custom, scene_plan, render_components, planned_components, builder_guides),
+    # and the field hash of 16,000 nodes took 0.6 ms each time. Frozen fields never change,
+    # so it is computed once per instance, as Model does. Equality is still field by field.
+    def __hash__(self):
+        value = self.__dict__.get('_hash')
+        if value is None:
+            value = hash(self._fields())
+            object.__setattr__(self, '_hash', value)
+        return value
+
+    def __reduce__(self):
+        # Never carry the cached hash across pickling or copying: string hashes differ per process.
+        return type(self), self._fields()
+
+    def _fields(self):
+        return (self.name, self.nodes, self.edges, self.curves, self.motion_path, self.guides, self.attachments, self.styles)
 
     @property
     def playable(self):return bool(self.edges or self.curves)
@@ -141,13 +162,24 @@ class Drawing:
         return replace(self,curves=tuple(c for k,c in enumerate(self.curves) if k!=index-len(self.edges)))
 
     def connected(self,indices):
-        chosen=set(indices);nodes={i for k in chosen for i in self.segments[k]}
-        while True:
-            more={k for k,segment in enumerate(self.segments) if nodes.intersection(segment)}
-            if more<=chosen:return frozenset(chosen)
-            chosen|=more;nodes.update(i for k in more for i in self.segments[k])
+        # The same closure as growing by shared nodes until nothing changes, as one walk over a
+        # node -> segments index (0.73.0-dev: the old loop was cubic on a long chain, hours at
+        # 16,000 nodes, and runs whenever a drawing is validated).
+        segments=self.segments;touching={}
+        for k,segment in enumerate(segments):
+            for i in segment:touching.setdefault(i,[]).append(k)
+        chosen=set(indices);stack=list(chosen);seen=set()
+        while stack:
+            for i in segments[stack.pop()]:
+                if i in seen:continue
+                seen.add(i)
+                for k in touching[i]:
+                    if k not in chosen:chosen.add(k);stack.append(k)
+        return frozenset(chosen)
 
-    def node_ids(self,indices):return {i for k in indices for i in self.segments[k]}
+    def node_ids(self,indices):
+        segments=self.segments
+        return {i for k in indices for i in segments[k]}
 
     def translate(self,indices,delta):
         moved=self.node_ids(self.connected(indices));dx,dy=delta
@@ -204,7 +236,7 @@ def paths(drawing):
     for curve in drawing.curves:
         spans=curve_spans(curve.kind,tuple(nodes[i] for i in curve.nodes),curve.side)
         count+=sum(len(s)-1 for s in spans)
-        if count>MAX_CURVE_POINTS:raise ValueError('Drawing exceeds the output detail budget. Simplify its curves.')
+        if count>MAX_DRAWING_POINTS:raise ValueError('Drawing exceeds the output detail limit. Simplify its curves.')
         result.append(np.concatenate((spans[0],*(s[1:] for s in spans[1:]))))
     for p in result:p.setflags(write=False)
     return tuple(result)

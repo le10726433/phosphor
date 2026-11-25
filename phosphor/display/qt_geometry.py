@@ -15,7 +15,47 @@ def stroke_triangles(points, width):
     return np.stack((a+normal, a-normal, b+normal, b+normal, a-normal, b-normal), axis=1).reshape(-1, 2).copy()
 
 
-BEAM_VERTEX = np.dtype([('x','<f4'),('y','<f4'),('r','u1'),('g','u1'),('b','u1'),('a','u1')])
+EDGE_ARRAYS_MAX = 16
+_edge_arrays = {}  # id(edges) -> (edges, its index array); holding edges keeps the id valid.
+
+
+def edge_array(edges):
+    """`edges` as an (n, 2) index array, cached for the same edges object (P7c, hot spot H3).
+
+    The muted outline converts its model's edge list every display frame: 2.95 ms at 18,796
+    edges. Route edges come from lru caches (model_route), so the object repeats frame to frame.
+    """
+    if isinstance(edges, np.ndarray): return edges.reshape(-1, 2)
+    entry = _edge_arrays.get(id(edges))
+    if entry is not None and entry[0] is edges: return entry[1]
+    array = np.asarray(edges, dtype=np.intp).reshape(-1, 2)
+    array.setflags(write=False)
+    if len(_edge_arrays) >= EDGE_ARRAYS_MAX: _edge_arrays.pop(next(iter(_edge_arrays)))
+    _edge_arrays[id(edges)] = (edges, array)
+    return array
+
+
+def stroke_edges(points, edges, width):
+    """Triangles for separate segments points[a]–points[b], one pair (a, b) per edge.
+
+    The same vertices, in the same order, as concatenating stroke_triangles(points[[a, b]], width)
+    for each edge (audit P3: one NumPy pass instead of one call per edge). The segments stay
+    separate, so no connectors are drawn between them.
+    """
+    edges = edge_array(edges)
+    if not len(edges):
+        return np.empty((0, 2), dtype=np.float32)
+    points = np.asarray(points, dtype=np.float32)
+    a, b = points[edges[:, 0]], points[edges[:, 1]]
+    delta = b - a
+    length = np.linalg.norm(delta, axis=1)
+    keep = length > 1e-6
+    a, b, delta, length = a[keep], b[keep], delta[keep], length[keep]
+    normal = np.column_stack((-delta[:, 1], delta[:, 0])) * (width/2 / length[:, None])
+    return np.stack((a+normal, a-normal, b+normal, b+normal, a-normal, b-normal), axis=1).reshape(-1, 2).copy()
+
+
+BEAM_VERTEX =np.dtype([('x','<f4'),('y','<f4'),('r','u1'),('g','u1'),('b','u1'),('a','u1')])
 BEAM_KNEE, BEAM_EXPONENT, BEAM_FLOOR = 1.1, 1., .08
 
 

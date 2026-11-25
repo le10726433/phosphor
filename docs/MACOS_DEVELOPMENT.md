@@ -35,8 +35,7 @@ The development run used native arm64 Python 3.12.16 on macOS 26.6.2 with Xcode
 
 The label beneath the viewport should report Metal and the actual graphics
 adapter. Qt uses the native macOS menu bar and Command+N/O/S/Shift+S scene shortcuts.
-Audio is stopped on startup. The retained CPU/Tk editor is not the supported Mac
-launch path and has no text-authoring controls.
+Audio is stopped on startup. (The CPU/Tk editor was removed in 0.37.0-dev.)
 
 ## Controls and vector text
 
@@ -110,7 +109,9 @@ unchanged. See [PERFORMANCE.md](PERFORMANCE.md) for measured conditions.
 Run from the app folder:
 
 ```sh
+.venv/bin/python -m unittest discover -s tests/unit -t .
 .venv/bin/python tools/check_core.py
+.venv/bin/python tools/run_smokes.py
 .venv/bin/python tests/smoke/smoke_qt_editor.py --headless
 .venv/bin/python tests/smoke/smoke_responsive_text.py --headless
 .venv/bin/python tests/smoke/smoke_view_modes.py --headless
@@ -122,9 +123,10 @@ stereo conversion and packet framing without requesting capture permission.
 Tests cover packet splitting, sample/rate preservation, invalid input, cancellation,
 transport cleanup, Windows backend fakes, text routes, scenes and travel strategies.
 
-Offscreen rendering uses Software; it does not verify Metal drawing. Core checks
-explicitly exclude legacy Tk desktop/viewport classes. Full discovery also runs
-those classes and requires a working Tk desktop. Native GUI/Core Audio access may
+Offscreen rendering uses Software; it does not verify Metal drawing. `check_core.py` is the
+fast Qt-free subset (0.74.0); full discovery is the release check. `tools/run_smokes.py` runs
+every smoke natively at QT_SCALE_FACTOR 1 and 1.5 and judges each by its own exit code
+(`--headless` for offscreen, which is not Metal evidence). Native GUI/Core Audio access may
 be unavailable in a restricted shell sandbox even when the desktop app works.
 
 For native UI checks, run the smoke scripts without `--headless`. For diagnostics:
@@ -151,6 +153,7 @@ Quantitative physical-scope calibration remains hardware-specific. Physical MIDI
 wider hardware coverage remain separate checks. The Windows native UI has not
 been reverified from this Mac; retain its established path and regression tests.
 
+
 ## Standalone app bundle — 0.30.0-dev
 
 `tools/build_macos_app.py` packages the Qt editor as `phosphor.app` with PyInstaller:
@@ -171,7 +174,6 @@ been reverified from this Mac; retain its established path and regression tests.
   not `.user` (app_paths.py). Source runs still use `.user`, so the two do not share
   settings. PHOSPHOR_USER_DIR overrides both for testing.
 - Cmd+N relaunches the bundle's own executable (app_paths.relaunch_command).
-- The Tk `--cpu` fallback is not included.
 - The signature is ad hoc. It runs on the Mac that built it. Other Macs will block
   it until it is signed with a Developer ID and notarized, or until the user allows
   it under System Settings > Privacy & Security. System-audio permission is granted
@@ -193,8 +195,8 @@ Signal-output calibration is intentionally separate from Appearance and scenes.
 `phosphor/storage/signal_preferences.py` stores `.user/signal-preferences.json`; `output_settings()`
 applies the profile to generated Qt playback/export, without mutating Scene.
 MIDI performance JSON records the actual calibrated settings. Source WAV and
-original/captured audio remain unmodified. The retained CPU/Tk UI does not load
-this profile; direct engine callers may set Settings.corner_dwell_us explicitly.
+original/captured audio remain unmodified. Direct engine callers may set
+Settings.corner_dwell_us explicitly.
 
 `phosphor/engine/corner_dwell.py` detects projected turns >=30° and reserves equal phase holds,
 with a 25% total source-cycle cap. Edge travel uses the remaining phase. Source

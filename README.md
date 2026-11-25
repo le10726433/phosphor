@@ -1,13 +1,17 @@
 # phosphor
 
 **phosphor** turns sound into pictures on an X–Y oscilloscope, and pictures into
-sound. Stereo audio drives the two axes of the beam: left is X and right is Y. The
-app shapes music and live MIDI so the beam traces wireframe solids, vector text,
-3D models, SVG drawings and shapes you draw yourself, then shows the result on a
+sound. Stereo audio drives the two axes of the beam: left is X and right is Y. You
+build scenes of wireframe solids, text, equations, drawings and 3D models, play them
+from a scale, MIDI or a song arranged on a timeline, and see the result on a
 simulated phosphor screen. It runs on **macOS (Metal)** and **Windows (Direct3D 11)**.
 
 phosphor is free software under the [GNU GPL v3](LICENSE). Download a ready-made
 app from [Releases](../../releases), or build it yourself from this source.
+
+Open **Help › Manual** in the app or read the
+[illustrated user manual](docs/manual/README.md) on GitHub.
+It covers setup, Sandbox, Composer, transforms, signal output, export and worked examples.
 
 ## Contents
 
@@ -17,82 +21,113 @@ app from [Releases](../../releases), or build it yourself from this source.
 - [How the program is structured](#how-the-program-is-structured)
 - [How shapes are drawn and generated](#how-shapes-are-drawn-and-generated)
 - [How the phosphor screen is simulated](#how-the-phosphor-screen-is-simulated)
-- [Troubleshooting](#troubleshooting) · [Validation](#validation) · [License and credits](#license-and-credits)
+- [Troubleshooting](#troubleshooting) · [Updating](#updating-without-losing-settings) · [Validation](#validation) · [License and credits](#license-and-credits)
 
 ## Key features
+
+
+### Workspaces
+
+- **Sandbox** edits and plays a single scene from its own source: a scale, a MIDI file,
+  a single tone or Live MIDI. It also visualizes system audio or a video file.
+- **Composer** arranges a song. Scene clips play on a timeline, the note roll supplies
+  the pitch, automation lanes change any number of a clip over time, and audio tracks
+  add sound files. Save it as a project, or export audio or video.
+- Both workspaces have Undo and Redo, **File › Open Recent**, and autosave with crash
+  recovery every 120 seconds.
 
 ### Shapes
 
 - **Built-in objects:** the five Platonic solids, a 2D triangle, square and pentagon,
   a tilting circle and an octant sphere.
-- **Multi-object scenes:** each object has its own position, size, X/Y/Z view angles
-  and X/Y/Z spin (up to ±10 rev/s). Objects start still and can deliberately extend
-  past the output range and clip.
-- **Vector text:** up to 64 characters of letters, digits and punctuation, traced
-  through the same geometry engine. Lowercase is drawn as capitals.
-- **Imports:** Wavefront OBJ models (**File → Import 3D model…**, reduced to at most
-  256 feature edges) and SVG artwork (**File → Import SVG…**), which becomes a normal
-  editable drawing.
-- **Shape builder:** lines, polylines, three-point arcs, semicircles, circles and
-  interpolating splines, with snap-and-join, node editing, Undo/Redo, box selection,
-  clipboard tools and construction axes. Drawings save as reusable `.shape.json` files.
-- **Text, bold and extrude in the builder:** a Text tool places typed letters as
-  ordinary strokes. Per selected shape, **Bold width** traces the outline of the
-  strokes fattened to that width, and **Extrude depth** adds front and back copies
-  along Z joined at the corners, which shows when the shape turns.
-- **Motion paths:** inside the builder, mark a path as a guide and assign follower
-  shapes to it, with velocity, loop, bounce or stop, and optional direction following.
-  Guides are never heard or drawn in the output. Timeline editing is deferred.
+- **Vector text:** up to 64 characters, traced through the same geometry engine.
+  Lowercase is drawn as capitals.
+- **Equations:** parametric x, y (and z) expressions, and recurrence equations, with
+  built-in and saved presets and variables that automation can drive.
+- **Imports:** 3D models in OBJ, STL, glTF and GLB (**File › Import 3D model…**), with a
+  live preview, optional simplification and baked glTF animation; SVG artwork
+  (**File › Import SVG…**), which becomes an editable drawing.
+- **Shape builder:** lines, polylines, arcs, semicircles, circles and splines, with
+  snap-and-join, node editing, Undo/Redo, box selection and clipboard tools. Drawings
+  save as reusable `.shape.json` files. Inside the builder, a path can guide follower
+  shapes (motion paths).
+- **Transforms:** each object has an ordered stack of Rotate, Spin, Translate, Scale,
+  Shear, Mirror, Motion path, Perspective, Map and Noise steps. Fields take numbers,
+  expressions or automation, objects carry up to eight variables of their own, and
+  stacks can be saved and reused.
+- **Scenes:** each object has its own position, size and path window (where its trace
+  starts and how much of it the beam draws). Objects can be muted or soloed, and
+  **Replace** changes an object's type while keeping its place, transforms and
+  automation.
+- **Inspect one cycle** freezes the pose and shows one drawing cycle with its direction
+  and travel, with a scrub cursor and a pinned reference to compare against.
+
+### Composer
+
+- **Timeline:** scene clips you can move, split, duplicate and colour; a loop; section
+  markers; tempo changes and time signatures; metronome, count-in and tap tempo; zoom to
+  fit; and cycle audition, which loops one trace cycle at the stopped playhead.
+- **Note roll:** up to 20,000 notes, chords of up to eight voices (or last-note
+  priority), velocity, glide, box selection and note tools, MIDI import and export, and
+  recording from a Live MIDI controller.
+- **Automation:** lanes for transform fields, equation and object variables, levels and
+  On/Off switches, with linear, curved and hold segments. Muting, soloing or switching an
+  object off sweeps it out of the beam path without a click.
+- **Audio tracks:** up to 32 tracks and 256 clips of WAV, FLAC, OGG, MP3 or AIFF. Each
+  track has gain, pan, phase (true phase or a time delay), mute and solo, with pan and
+  phase lanes and a gain lane on each clip. Missing files can be located again, and
+  **Collect media** copies a project's files beside it. Because left is X and right is Y, the sound moves the figure.
+- **Track effects:** up to eight per track (filter, saturate, bitcrush, delay and
+  compressor), each parameter with its own automation lane.
+- **Library panel:** left of the scope. **Browser** finds audio files, scenes,
+  equations, transforms and models, previews audio and drags files onto tracks.
+  **Effects** edits the selected audio track's effects.
 
 ### Sound
 
-- **Sources:** a built-in C-major scale, or the melody of any MIDI file you open.
-  phosphor ships no music; bring your own `.mid` files.
-- **Function plots:** play and draw two expressions, x(t) and y(t), in Python maths
-  syntax, with up to 8 variables on sliders. Only maths is accepted, so scene and
-  preset files cannot run code. Built-in presets, and your own saved presets.
+- **Generated sources:** a configurable scale, a single tone, a MIDI file or Live MIDI.
 - **Live MIDI:** eight voices, 12 synth presets, velocity, pitch bend, sustain,
   sostenuto and CC1 octave alternation, with sample-aligned WAV, MIDI and JSON
   performance recording.
-- **Device-rate audio:** playback and Live MIDI run at the output device's own rate
-  (96 kHz included), so the system doesn't resample the X/Y signal.
-- **Low-latency output:** Live MIDI uses WASAPI exclusive mode on Windows and a Core
-  Audio callback stream on macOS, with 128-frame blocks up to 48 kHz and about 5 ms
-  blocks above that. See [audio output paths](#audio-output-paths).
+- **Output:** choose the output device (or follow the system default as it changes) and
+  the output sample rate (follow the device, or 44.1 to 192 kHz). Playback runs in 10 ms
+  blocks at any rate.
+- **Low-latency Live MIDI:** WASAPI exclusive mode on Windows and a Core Audio callback
+  stream on macOS, with 128-frame blocks up to 48 kHz and about 5 ms blocks above that.
+  See [audio output paths](#audio-output-paths).
 - **Listening modes:** original source, fully shaped audio, or a blend of the two.
-- **Signal preferences:** hardware corner dwell (0–500 µs, capped at 25% of a cycle)
-  experimental shape redraw (1–32 passes per shape, off by default) and **route
-  minimizing** (Off, Shortest jumps, or Shortest total path, the default). These change
-  generated X/Y samples and are stored separately from scenes and appearance.
-- **WAV export:** source or processed audio at 48 kHz, 16-bit stereo.
+- **Signal output preferences:** hardware corner dwell, shape redraw, route minimizing
+  and the switch sweep. These change the generated X/Y samples and are stored per
+  machine, separately from scenes and appearance.
+- **Export:** WAV or FLAC at 44.1 to 192 kHz, 16 or 24 bits or 32-bit float; Composer
+  exports the whole song or the loop. **File › Export video…** renders the scope with
+  its audio.
 
 ### Display
 
 - **Simulated phosphor screen:** a GPU energy buffer that builds up light where the
-  beam lingers and fades it over time, on by default, with a Gaussian or hard-edged
-  beam and bloom glow that stays continuous around sharp corners. See
+  beam lingers and fades it over time, with a Gaussian or hard-edged beam and bloom glow
+  that stays continuous around sharp corners. See
   [how it works](#how-the-phosphor-screen-is-simulated).
-- **Phosphor profiles:** Palette colour, P31, P1 and P7 presets, plus a saved Custom
-  profile. Preferences shows each decay as an intensity-against-time plot, filled with
-  the emitted colour; drag it or type values to edit, and a changed preset becomes Custom.
-- **Phosphor grain and beam shimmer:** optional screen-fixed grain and per-frame
-  variation of new light, both off by default.
-- **Video input:** play a video file with its sound, drawn as a 60 Hz monochrome
-  scanline raster on the phosphor screen, using Qt Multimedia's FFmpeg backend.
-- **Phosphor brightness:** a slider under the scope, shared with Phosphor intensity in
-  Preferences and hidden in the trace-only view.
-- **Line trace:** the phosphor display can be turned off for a crisp vector trace
-  with optional beam-speed brightness and glow.
-- **Palettes:** Green monochrome, Amber, Cyan and OLED white, each with a matching logo.
+- **Phosphor profiles:** P31 green (the default), Palette colour, P1 and P7, plus a
+  saved Custom profile edited as an intensity-against-time plot.
+- **Line trace:** turn the phosphor display off for a crisp vector trace with optional
+  beam-speed brightness and glow.
+- **Colour presets:** OLED white, Green monochrome, Amber, Cyan and macOS Graphite.
+- **Styles:** **Classic** draws the controls in the scope's palette. **Modern** uses
+  rounded controls, the system font and blue accents, in Dark, Light or following the
+  system.
+- **Display rate:** frames follow the monitor's refresh rate (or a steady 60 Hz), with
+  phosphor brightness and decay normalized to look the same at any rate.
 - **System-audio visualization:** Core Audio taps on macOS and WASAPI loopback on
-  Windows, at the device's rate. Input-only: captured audio stays in memory and is
-  never played back, recorded, shaped or exported.
-- **X(t), Y(t) sweep:** system audio can also be drawn against time on the phosphor
-  display, with X, Y or independent triggers on either edge, adjustable trace
-  separation and a 0.1–2000 ms scan window.
-- **Views:** fullscreen and a trace-only immersive view (Escape restores the controls).
-- **Layout:** a resizable control panel to the right of the viewport that fits the
-  1000×700 minimum window size.
+  Windows. Input only: captured audio is never played back, recorded, shaped or exported.
+- **Time view:** X(t) and Y(t) against time, with X, Y or independent triggers on
+  either edge and a 0.1–2000 ms window.
+- **Video input:** a video file shown as a monochrome phosphor raster.
+- **Views:** full screen, a trace-only view (Escape restores the controls) and a
+  pop-out monitor for a second screen.
+- **Layout:** resizable side panels and timeline; keyboard shortcuts you can change in
+  **Preferences › Controls**.
 
 Appearance settings only change the preview. They never alter audio, scene files or
 exports.
@@ -102,6 +137,7 @@ no third channel to blank the beam. Complex shapes and long text share the sampl
 available in each musical cycle, so high notes can lose geometric detail.
 
 ## Download
+
 
 Each [release](../../releases) has a macOS disk image and a Windows zip, built from
 the tagged source by [GitHub Actions](.github/workflows/release.yml).
@@ -126,9 +162,11 @@ If you'd rather not bypass these checks, [build the apps](#build-the-apps) yours
 
 ## Run from source
 
+
 Use **Python 3.12** (64-bit). On macOS, install Xcode Command Line Tools
 (`xcode-select --install`); the app compiles its small system-audio capture helper
-locally the first time you use it.
+locally the first time you use it. System-audio monitoring needs macOS 14.2 or later
+and asks for System Audio Recording permission the first time.
 
 macOS:
 
@@ -154,6 +192,7 @@ Later, launch with `./LaunchMac.command` or `LaunchQt.bat`. See the
 [macOS development guide](docs/MACOS_DEVELOPMENT.md) for permissions and diagnostics.
 
 ## Build the apps
+
 
 Both builds use PyInstaller and run on the platform they target.
 
@@ -181,107 +220,86 @@ links one. Pushing a `v*` tag runs the same scripts in
 
 ## Try the app
 
-### Music and shapes
 
-1. Leave **Monitor input** on **Generated scene / MIDI**. Use the built-in
-   C-major scale and **Tempo = 120 BPM** for a first test. To play a melody, choose
-   **Source → MIDI file** and pick a `.mid` file; phosphor plays its top line.
-2. Open **SCENE → Objects** and select Cube. Drag its center to move it, or its corner
-   handle to resize it. **Add shape** and **Duplicate** create more shapes.
-3. Set your computer's listening volume low, then click **PLAY AUDIO**. Geometry
-   shaping changes the sound, so the result can be harsher than the source tone.
-4. In **MIX**, compare **Original audio**, **Fully shaped audio**, and
-   **Processed output**. The preview follows the selected listening mode.
-5. Stop playback when finished. Use **File → Save scene** to save your
-   configuration as a `.scene.json` file. Reopening a scene does not start audio.
+### Built-in music and shapes
 
-Generated playback uses your default stereo output at that device's own rate. You can
-export source or processed WAV files from **File**; these are always 48 kHz. Wait for
-export to finish before closing. Left audio represents X and right audio represents Y.
+1. Click **Sandbox** at the right of the application bar.
+2. Click **Scene**, then **Objects › Add object › 3D solids › Cube**. Drag its centre
+   to move it, or its corner handle to resize it.
+3. Click **Input**. Set **Monitor input** to **Generated scene / MIDI** and **Source**
+   to **Scale** (C major, C3 to C6, at 120 BPM).
+4. Set your computer's listening volume low, then click **Play**. Geometry shaping
+   changes the sound, so the result can be harsher than the source tone.
+5. Open **Scene › Transform** and click **Add › Spin** to turn the cube continuously.
+6. In **Mix**, compare **Original audio**, **Fully shaped audio** and **Processed
+   output**.
+7. Click **Stop**, then **File › Save scene** to keep it as a `.scene.json` file.
+   **File › Send scene to Composer** puts it into a song.
+
+Then try **Composer**: the manual's [first song in ten minutes](docs/manual/08-composer.md#83-a-first-song-in-ten-minutes)
+walks through clips, notes and automation.
 
 ### Visualize music playing on your computer
 
-1. In **INPUT → Monitor input**, choose **System audio (visualization)**.
+1. In **Input › Monitor input**, choose **System audio (visualization)**.
 2. Select the playback device used by your browser or music player.
-3. Click **START VISUALIZATION**, then play music in that other application.
-4. Adjust **Input gain** if the trace is too small. This changes only the preview,
-   leaving playback volume and captured samples unchanged.
-5. To see the waveforms against time, set **Display** to **X(t), Y(t) sweep**.
-   **Separation** moves X up and Y down, and **Window** sets the sweep length.
-   **Trigger** picks X, Y or Both, and Rising or Falling. Both gives each trace its
-   own sweep so unrelated waveforms stand still, but X and Y then no longer share a
-   time base. On short-persistence phosphors a slow sweep shows as a moving spot; use
+3. Click **Start** on the application bar, then play music in that other application.
+4. To see the waveforms against time, set **Appearance › Monitor › View** to the time
+   view. **Trigger** picks X, Y or Both, and Rising or Falling; **Window** sets the
+   sweep length. On short-persistence phosphors a slow sweep shows as a moving spot; use
    P7 or a long Custom afterglow to see all of it.
-6. Click **STOP VISUALIZATION** before changing devices. Switch back to
-   **Generated scene / MIDI** to edit shapes again.
+5. Click **Stop** before changing devices. Switch back to **Generated scene / MIDI** to
+   edit shapes again.
 
 System-audio mode only displays the incoming stereo waveform. It does not impose
 shapes on that audio, play it a second time, record it, or export it.
 
-### Plot functions
-
-1. In **INPUT → Monitor input**, choose **Function x(t), y(t)**.
-2. Pick a preset or type two expressions in the **X(t), Y(t)** tab. `t` is time in
-   seconds and `s` is the 0–1 position in a cycle at the chosen frequency; add
-   variables to get sliders for them.
-3. Click **PLAY AUDIO**. Output above ±1 is clipped; **MIX → Output level** scales it.
-   Scenes save the functions; **Save as preset…** keeps them for any scene.
-
-### Play a video
-
-1. In **INPUT → Monitor input**, choose **Video file (phosphor CRT)** and open a file.
-2. Play, seek, loop and set the volume and raster lines there. The picture is drawn
-   as scanlines on the phosphor screen, so the phosphor profile and glow apply; with
-   the phosphor display off it uses the palette colour.
-
 ### Play a MIDI controller
 
-1. Connect your controller before launching the app, or click **Refresh** in INPUT → Live MIDI.
-2. In generated mode, select the MIDI source under **INPUT → Source**.
-3. Under **INPUT → Live MIDI**, select your **MIDI input device**, click **Connect**, and choose a **Synth preset**.
-4. Click **PLAY AUDIO**, then play notes. MIDI sends note/control messages; the
-   app synthesizes the sound through your computer's default output.
-5. Adjust **MIDI gain before shaping** for shape size; polyphony shares available
-   level among voices. Reduce gain if the trace clips. **Panic** releases stuck notes.
+1. In Sandbox, select **Input › Source › Live MIDI**.
+2. Choose your **MIDI input device** (choosing it connects it; **Refresh** looks again),
+   and a synth preset.
+3. Click **Play**, then play notes. The app synthesizes the sound through your output.
+4. Adjust **MIDI gain** for shape size; polyphony shares the level among voices.
+   **Panic** releases stuck notes.
 
-Live MIDI takes exclusive use of the output device on Windows for the lowest
-delay, so other apps go silent on that device until you stop audio.
-
-Use **Record…** / **Stop recording** for MIDI performance capture. See the
-[application guide](GUIDE.md#live-midi-controller-mode) for
-controller mappings and recording details.
+Live MIDI takes exclusive use of the output device on Windows for the lowest delay,
+so other apps go silent on that device until you stop. Use **Record…** for a
+performance recording, or Composer's **Record** button to record notes into the roll.
 
 ### Appearance and saved work
 
-**Preferences → Appearance** controls the palette, grid lines (which can be turned
-off), scanlines, trace thickness, glow, beam-speed brightness, display interpolation,
-beam profile, **Phosphor display** profile and **Phosphor intensity** (0.1–64, default
-5). **Glow decay time** applies only to the line trace and is greyed out otherwise.
-**Apply/OK** saves preferences; **Cancel** restores the last applied values. The
-**Phosphor brightness** slider under the scope saves as soon as you stop moving it.
-Double-click a slider thumb to reset its default.
+**Appearance** (side panel or **Preferences › Appearance…**) has **Display**, **Beam**,
+**Phosphor**, **Decay** and **Monitor** tabs: style, colour preset, grid, scanlines,
+trace and glow, the phosphor profile and its decay, and the monitor view. The side
+panels apply as you edit; the dialogs preview and save with **Apply** or **OK**.
+Double-click a slider to restore its default.
 
-Scene files store your shapes and musical settings, and the path of any MIDI file they
-play. They do not store appearance preferences. Scenes are saved as version 10; version 8
-and 9 files, including those from phosphor 0.32.6, still open.
-Files saved by phosphor 0.31.0 are rejected rather than converted, because
-seconds-per-revolution rotation was removed. Preferences are saved separately in `.user/preferences.json` when
-running from source, or in your per-user app data folder for a packaged app.
+Scenes (`.scene.json`) store objects, transforms, equations, imported drawings and
+models, the source and the mix. Projects (`.project.json`) store the whole song and
+link to their audio files. Neither stores appearance or signal preferences, which
+are saved per computer in `.user/` in the source folder (or the per-user app data folder
+for a packaged app). Save documents somewhere you can find them, preferably outside
+the extracted project folder.
 
 ## How the program is structured
 
-The app is Python, NumPy and PySide6. All audio and geometry math runs on the CPU in
-NumPy. The GPU only draws: Qt Quick's rendering layer selects Direct3D 11 on Windows
-and Metal on macOS from the same scene-graph code and compiled shaders.
+
+The app is Python, NumPy and PySide6, with Numba for the recurrence and model
+kernels. All audio and geometry math runs on the CPU. The GPU only draws: Qt Quick's
+rendering layer selects Direct3D 11 on Windows and Metal on macOS from the same
+scene-graph code and compiled shaders.
 
 ```mermaid
 flowchart LR
-    A[Scale, MIDI file<br/>or Live MIDI] --> B[Signal engine<br/>phase to path]
-    S[Scene and shapes] --> B
-    B --> C[Audio output]
-    B --> D[Playback history]
+    A[Scale, MIDI file,<br/>Live MIDI or note roll] --> B[Signal engine<br/>phase to path]
+    S[Scenes, clips<br/>and automation] --> B
+    T[Audio tracks<br/>and effects] --> M[Song mix]
+    B --> M
+    M --> C[Audio output]
+    M --> D[Playback history]
     E[System audio<br/>capture] --> D
-    D --> F[GUI tick<br/>about 60 per second]
+    D --> F[Display tick<br/>per monitor frame]
     F --> G[Phosphor energy buffer]
     F --> H[Line trace, grid, overlays]
     G --> I[Viewport]
@@ -292,31 +310,35 @@ flowchart LR
 
 | Area | Files | Responsibility |
 | --- | --- | --- |
-| Entry and editor | `app.py`, `phosphor/editor/qt_app.py`, `phosphor/editor/qt_platform.py`, `phosphor/storage/app_paths.py` | Launch routing, the Qt editor window, menus, preferences, scene lifecycle, the viewport tick and graphics API selection |
-| Scene state and files | `phosphor/editor/qt_scene.py`, `phosphor/storage/app_files.py`, `phosphor/storage/signal_preferences.py` | Immutable editing state, versioned scene and shape files, validated appearance and signal preferences, atomic writes |
-| Signal engine | `phosphor/engine/signal_engine.py`, `phosphor/engine/scene_path.py`, `phosphor/engine/route_plan.py`, `phosphor/engine/corner_dwell.py` | Turning audio phase into X/Y samples, poses, scene routes, route minimizing, travel strategies and dwell |
-| Geometry | `phosphor/engine/solids.py`, `phosphor/engine/vector_text.py`, `phosphor/engine/custom_shape.py`, `phosphor/engine/stroke_style.py`, `phosphor/engine/curve_geometry.py`, `phosphor/engine/model_object.py`, `phosphor/engine/svg_import.py` | Built-in wireframes, the stroke alphabet, builder drawings, bounded curve tessellation and OBJ/SVG import; bold outlines and extrusion |
-| Motion | `phosphor/engine/motion_path.py`, `phosphor/engine/drawing_motion.py`, `phosphor/editor/motion_dialog.py`, `phosphor/editor/drawing_motion_dialog.py` | Guide routes, follower assignment and pose evaluation |
-| Shape builder | `phosphor/editor/shape_builder.py`, `phosphor/editor/builder_selection.py` | The in-window drawing canvas and its selection tools |
-| Sources and synthesis | `phosphor/audio/score_source.py`, `phosphor/engine/function_plot.py`, `phosphor/editor/function_panel.py`, `phosphor/audio/midi_synth.py`, `phosphor/audio/live_midi.py` | The scale, the melody line of a MIDI file, function plots and their presets, eight-voice synthesis, MIDI input and performance capture |
-| Audio I/O | `phosphor/audio/audio_preview.py`, `phosphor/audio/playback_history.py`, `phosphor/audio/system_audio.py`, `phosphor/audio/macos_system_audio.py`, `native/macos_capture/` | Output streams, the clocked preview history, and input-only system capture |
-| Rendering | `phosphor/display/qt_scope.py`, `phosphor/display/qt_geometry.py`, `phosphor/display/glow_trail.py`, `phosphor/display/trace_interpolation.py`, `phosphor/display/time_sweep.py`, `phosphor/editor/video_player.py` | Viewport geometry, stroke tessellation, afterimages, display interpolation, the triggered sweep and the video raster |
-| Phosphor | `phosphor/display/phosphor.py`, `phosphor/display/qt_phosphor.py`, `phosphor/editor/phosphor_editor.py`, `phosphor/assets/shaders/` | The Qt-free energy model and decay profiles, the GPU feedback and bloom layers, their shaders, and the decay editor |
-| Look and text | `phosphor/display/crt_theme.py`, `phosphor/display/branding.py`, `phosphor/editor/audio_help.py`, `phosphor/storage/build_info.py` | Palettes, logos, in-app help, version and instructions |
-| Retained CPU edition | `phosphor/legacy_tk/desktop_ui.py`, `phosphor/legacy_tk/viewport.py`, `phosphor/legacy_tk/slider_input.py` | The Tk fallback launched by `python app.py --cpu` |
+| Entry and editor | `app.py`, `phosphor/editor/qt_app.py`, `phosphor/editor/qt_platform.py`, `phosphor/editor/shortcuts.py` | Launch routing, the main window, menus, panels, the viewport tick, graphics API selection and the shortcut registry |
+| Composer | `phosphor/engine/composition.py`, `phosphor/editor/composer_view.py`, `phosphor/engine/tempo_map.py`, `phosphor/engine/automation.py`, `phosphor/engine/note_edit.py` | Projects, the song render, the timeline and note roll, tempo and meter maps, automation lanes |
+| Audio tracks | `phosphor/engine/audio_clips.py`, `phosphor/engine/track_mix.py`, `phosphor/engine/track_effects.py`, `phosphor/engine/track_chain.py`, `phosphor/editor/track_effects_window.py` | Decoded media, pan and phase, effects, the effect state carried across blocks, and the Effects page |
+| Library | `phosphor/editor/browser_panel.py`, `phosphor/engine/audio_browse.py`, `phosphor/storage/browser_places.py` | The Browser and Effects pages, folder listing and search off the GUI thread |
+| Documents and preferences | `phosphor/editor/qt_scene.py`, `phosphor/storage/app_files.py`, `phosphor/storage/project_files.py`, `phosphor/storage/signal_preferences.py`, `phosphor/storage/autosave.py` | Immutable editing state, versioned scene, project and shape files, preferences, atomic writes and recovery copies |
+| Signal engine | `phosphor/engine/signal_engine.py`, `phosphor/engine/scene_path.py`, `phosphor/engine/route_plan.py`, `phosphor/engine/corner_dwell.py`, `phosphor/engine/switch_sweep.py` | Turning audio phase into X/Y samples: poses, scene routes, travel, dwell and switch sweeps |
+| Geometry | `phosphor/engine/solids.py`, `phosphor/engine/vector_text.py`, `phosphor/engine/custom_shape.py`, `phosphor/engine/curve_geometry.py`, `phosphor/engine/function_plot.py`, `phosphor/engine/recurrence.py`, `phosphor/engine/model_object.py`, `phosphor/engine/mesh_readers.py`, `phosphor/engine/svg_import.py` | Built-in wireframes, the stroke alphabet, builder drawings, equations, models and SVG import |
+| Transforms and motion | `phosphor/engine/transforms.py`, `phosphor/engine/noise_loops.py`, `phosphor/engine/motion_path.py`, `phosphor/engine/drawing_motion.py` | The transform stack, noise, guide routes and followers |
+| Shape builder | `phosphor/editor/shape_builder.py`, `phosphor/editor/builder_selection.py` | The drawing canvas and its selection tools |
+| Sources and synthesis | `phosphor/audio/score_source.py`, `phosphor/audio/midi_synth.py`, `phosphor/audio/live_midi.py`, `phosphor/engine/midi_recorder.py` | The scale and MIDI scores, eight-voice synthesis, MIDI input and recording |
+| Audio I/O | `phosphor/audio/audio_preview.py`, `phosphor/audio/output_devices.py`, `phosphor/audio/playback_history.py`, `phosphor/audio/system_audio.py`, `phosphor/audio/macos_system_audio.py`, `native/macos_capture/` | Output streams and devices, the clocked preview history and input-only system capture |
+| Rendering | `phosphor/display/qt_scope.py`, `phosphor/display/qt_geometry.py`, `phosphor/display/glow_trail.py`, `phosphor/display/trace_interpolation.py`, `phosphor/display/time_sweep.py`, `phosphor/display/video_renderer.py` | Viewport geometry, stroke tessellation, afterimages, interpolation, the time view and video frames |
+| Phosphor | `phosphor/display/phosphor.py`, `phosphor/display/qt_phosphor.py`, `phosphor/editor/phosphor_editor.py`, `phosphor/assets/shaders/` | The Qt-free energy model and decay profiles, the GPU feedback and bloom layers, and the decay editor |
+| Look and help | `phosphor/display/theme.py`, `phosphor/display/crt_theme.py`, `phosphor/display/branding.py`, `phosphor/editor/manual_view.py`, `phosphor/editor/audio_help.py`, `phosphor/storage/build_info.py` | Styles and palettes, logos, the bundled manual, audio troubleshooting and build metadata |
 
 ### Threads
 
 | Thread | Work | Rule |
 | --- | --- | --- |
 | GUI and render | Editor, the viewport tick, scene-graph updates | Qt's `basic` render loop keeps Python scene-graph callbacks on this thread |
-| Audio | A PortAudio callback for Live MIDI, or a blocking worker for built-in playback | Synthesizes in small blocks; never touches widgets |
+| Audio | A PortAudio callback for Live MIDI, or a blocking worker for playback | Renders 10 ms blocks; never touches widgets and never decodes files |
 | MIDI input | RtMidi delivers messages | Only queues them; the audio thread applies them at block boundaries |
-| Workers | WAV export, device discovery, MIDI port health checks, system capture | Keep slow work off the GUI thread |
+| Workers | Audio decoding, the Library browser, autosave, export, video export, model import, Numba compilation, system capture | Keep slow work off the GUI and audio threads |
 
 Settings cross threads as immutable snapshots. An edit replaces the audio thread's
 settings only when it is complete and valid, so a half-finished drawing can't corrupt
-the last playable state.
+the last playable state. Before Play, the app decodes the audio clips near the playhead
+and warms up the track effects, so playback starts cleanly; a clip whose file is still
+loading is silent until it arrives.
 
 ### Audio output paths
 
@@ -324,13 +346,14 @@ the last playable state.
 | --- | --- | --- |
 | Live MIDI, first choice | WASAPI exclusive callback | Core Audio callback |
 | Live MIDI, fallback | WASAPI shared, then the system default | Core Audio blocking |
-| Built-in playback | System default, 512 frames | System default, 512 frames |
+| Playback (scene, Composer, previews) | The chosen output device, 10 ms blocks | The chosen output device, 10 ms blocks |
 
-Every stream opens at the output device's own rate, falling back to 48 kHz if that
-can't be read. Windows takes the rate from the default WASAPI output, because MME
-reports 44.1 kHz whatever the device runs at. Live MIDI blocks are 128 frames up to
-48 kHz and about 5 ms above it (512 frames at 96 kHz): smaller blocks at 96 kHz fell
-behind real time with chords held, while reporting no underruns.
+Streams open at the device's own rate unless **Signal output › Output sample rate**
+chooses one; if the device refuses it, playback uses the device rate and says so.
+Windows takes the rate from the WASAPI device, because MME reports 44.1 kHz whatever the
+device runs at. Live MIDI blocks are 128 frames up to 48 kHz and about 5 ms above it
+(512 frames at 96 kHz): smaller blocks at 96 kHz fell behind real time with chords held.
+**System default** follows the system's output while playing.
 
 Measured on the development machines at 96 kHz, driver-reported output latency for
 Live MIDI was 8.3 ms on Windows (AudioBox USB 96) and 22.1 ms on macOS (External
@@ -339,6 +362,7 @@ Exclusive mode holds the output device, so other apps can't play through it whil
 MIDI audio runs. The status line shows the mode in use.
 
 ## How shapes are drawn and generated
+
 
 A scope draws by moving a single point, so every image has to become one continuous
 path. The central idea is **phase-driven traversal**: one cycle of the musical source
@@ -352,7 +376,9 @@ output    = output_level × ((1 − blend) × drawing + blend × original)
 ```
 
 The final output is hard-clipped to ±1. There's no automatic rescaling, so an object
-pushed past the edge flattens against it, in both the sound and the picture.
+pushed past the edge flattens against it, in both the sound and the picture. In
+Composer, audio tracks are added to this output after their own gain, pan, phase and
+effects.
 
 ### From object to samples
 
@@ -362,20 +388,22 @@ pushed past the edge flattens against it, in both the sound and the picture.
    - The tilting circle has 128 segments. The octant sphere is three 96-segment rings
      whose shared poles are merged into junctions.
    - Text uses a stroke alphabet in `phosphor/engine/vector_text.py`.
+   - Equations are sampled along their parameter; models are reduced to feature edges.
    - Builder drawings compile from stored nodes and curves (below).
 2. **Route.** The graph becomes a closed walk the beam can follow without lifting.
    - Polygons follow their perimeter.
    - If every vertex has even degree, a Hierholzer walk traces each edge exactly once.
-   - Otherwise edges are duplicated so such a walk exists. The cube doubles just a
-     perfect matching of four edges; other solids double every edge. Retraced edges
-     get more beam time, so they can look brighter and change the timbre.
-3. **Pose.** Vertices are rotated and projected orthographically to 2D.
-   - 3D solids rest under a fixed forward tilt of 0.40 radians.
-   - Each object's X, Y and Z view angle and spin then apply about the screen axes,
-     in that order. Given a Y spin, the tilting circle passes through an ellipse to a
-     line. Pose is held for each rotation-update interval (60 Hz by default), so
-     rotation can't change pitch.
-4. **Scene route.** All objects join into one path in `plan_scene`. Because stereo
+   - Otherwise edges are duplicated so such a walk exists. Retraced edges get more beam
+     time, so they can look brighter and change the timbre. **Route minimizing** can
+     replace a route with a shorter one.
+3. **Pose.** The object's transform stack runs in order: rotations, spin, translation,
+   scale, shear, mirror, motion paths, perspective, Map and noise, with any fields
+   driven by expressions, variables or automation. New solids rest untilted, with XY
+   facing the screen. The pose is held for each rotation-update interval (60 Hz by
+   default), so motion can't change pitch.
+4. **Path window.** Path Start and Trace choose where each object's trace begins and
+   how much of it is drawn.
+5. **Scene route.** All objects join into one path in `plan_scene`. Because stereo
    can't blank the beam, the moves between objects are real, visible lines. Four travel
    modes trade these off:
 
@@ -386,18 +414,20 @@ pushed past the edge flattens against it, in both the sound and the picture.
    | Nearest-shape ordering | Greedy nearest-entry order, kept only if it shortens travel |
    | Retrace existing edges | Enters and exits at the closest vertices and returns along real edges |
 
-5. **Sampling.** Cumulative segment lengths make the walk constant-speed. For each
+6. **Sampling.** Cumulative segment lengths make the walk constant-speed. For each
    sample, `frac(phase) × total_length` is located by binary search and interpolated
-   along its segment. The envelope scales only the shape around its own center, so a
+   along its segment. The envelope scales only the shape around its own centre, so a
    note's attack and release grow the shape in place.
 
 Summing two shapes' signals would produce a different figure rather than showing both,
-which is why a scene is always one sequential path.
+which is why a scene is always one sequential path. Scene plans are cached per pose
+frame, and automation lanes and baked clip settings are cached between audio blocks.
 
 ### Where the phase comes from
 
-- **Scale and score:** synthesized from known note timing, so no pitch detection is
-  involved.
+- **Scale, MIDI file and the note roll:** synthesized from known note timing, so no
+  pitch detection is involved. In Composer, chords give each voice its own pass through
+  the scene.
 - **Live MIDI:** each held voice traces the entire scene at its own pitch, then the
   voices are mixed with a fixed 1/8 of the level reserved for each. Chords therefore
   distort the figure by design.
@@ -405,10 +435,10 @@ which is why a scene is always one sequential path.
 
 ### Sample budget
 
-At 48 kHz, C3 gives about 367 samples per traversal and C6 only about 46; a 96 kHz
-output device doubles that during playback, while WAV exports stay at 48 kHz. When a route
-has more corners than a note has samples, the beam cuts across them and detail is lost.
-The engine deliberately adds no output filtering, corner smoothing or oversampling.
+At 48 kHz, C3 gives about 367 samples per traversal and C6 only about 46; at 96 kHz
+there are twice as many. When a route has more corners than a note has samples, the
+beam cuts across them and detail is lost. The engine deliberately adds no output
+filtering, corner smoothing or oversampling.
 
 ### Builder drawings
 
@@ -420,8 +450,8 @@ exact and editable.
   error stays within 0.0015 local units and each step is at most 5°.
 - **Splines** are centripetal Catmull–Rom curves through your points, converted to
   Bézier segments and adaptively split with de Casteljau subdivision.
-- **Limits** are 128 nodes, 256 segments and 4096 derived curve points. Tessellation
-  never depends on zoom, so editing the view can't change the sound.
+- **Limits** are 16,384 nodes, 32,768 segments and 65,536 derived curve points.
+  Tessellation never depends on zoom, so editing the view can't change the sound.
 - **Routing** uses an Euler walk when a component allows one and a depth-first retrace
   when it branches. Disconnected pieces are linked by explicit straight return trips.
 
@@ -434,8 +464,11 @@ exact and editable.
   travel so cycle timing is preserved. Smooth curve subdivisions don't count as corners.
 - **Shape redraw** repeats each drawable shape's route before traveling to the next,
   inside the same phase cycle, so note timing is unchanged.
+- **Switch sweep** shrinks an object's trace to nothing over a few milliseconds when it
+  is muted, soloed out or switched off, instead of cutting it with a click.
 
 ## How the phosphor screen is simulated
+
 
 On a real tube, the beam deposits energy into a phosphor coating, which glows and then
 fades. A fast-moving beam leaves little energy per point, a slow one leaves a lot, and
@@ -459,10 +492,10 @@ touches audio, scene files or exports.
 
 ### 1. Only new samples are deposited
 
-The viewport receives a 40 ms window of samples on every tick of about 16 ms, so the
-windows overlap. Drawing a whole window each frame would count most samples several
-times. `new_sample_count` deposits only what has arrived since the last tick: the change
-in playback position during audio, or elapsed time × sample rate otherwise.
+The viewport receives a 40 ms window of samples on every display frame, so the windows
+overlap. Drawing a whole window each frame would count most samples several times.
+`new_sample_count` deposits only what has arrived since the last frame: the change in
+playback position during audio, or elapsed time × sample rate otherwise.
 
 ### 2. Each sample deposits a fixed amount of energy
 
@@ -509,9 +542,10 @@ keep = exp(−elapsed / time_constant)
 ```
 
 Accumulated light therefore restarts when the window is resized. Using the measured
-`elapsed` keeps decay correct at any tick length. The small `step`
-removes faint residue so tails reach true black. Energy can build up to 64, far above a
-single frame's deposit, which is what allows real over-bright regions.
+`elapsed` keeps decay correct at any frame rate, so a 144 Hz display fades like a 60 Hz
+one. The small `step` removes faint residue so tails reach true black. Energy can build
+up to 64, far above a single frame's deposit, which is what allows real over-bright
+regions.
 
 Two implementation details matter:
 
@@ -519,10 +553,9 @@ Two implementation details matter:
   multisampled Direct3D 11 window, and the app needs 4× multisampling for its line art.
   So each energy value is stored as 16-bit fixed point across two 8-bit channels: fast
   in red and green, slow in blue and alpha.
-- **The buffer advances once per tick.** Its layers are `live: false` and are scheduled
-  explicitly. A live layer would run at the display's refresh rate and apply decay too
-  many times on displays above 60 Hz. Fitted P7 decay is 0.79 s on a 144 Hz Windows
-  display and 0.73 s on a 120 Hz Mac, against a 0.7 s preset.
+- **The buffer advances once per display frame.** Its layers are `live: false` and are
+  scheduled explicitly, so decay is applied exactly once per frame with that frame's
+  measured time.
 
 ### 5. Energy becomes light
 
@@ -583,62 +616,87 @@ If the shaders can't load, the app keeps the line trace.
 
 ## Troubleshooting
 
+
 | Problem | What to try |
 | --- | --- |
-| `py` or `python` is not recognized, or opens the Microsoft Store | Reopen the terminal after installing Python. Run the Python installer again and enable its PATH option if needed. Use `py -3.12` when another Python is also installed. |
-| `No suitable Python runtime found` | Install the 64-bit Python 3.12 runtime from step 1; having the launcher alone is insufficient. |
-| `requirements.txt` or `app.py` cannot be found | Open PowerShell inside the source folder. Run `dir` and check those files are listed. |
+| `py` or `python` is not recognized, or opens the Microsoft Store | Install 64-bit Python 3.12 from python.org with **Add python.exe to PATH**, then reopen the terminal. Use `py -3.12` when another Python is also installed. |
+| `requirements.txt` or `app.py` cannot be found | Run the commands from the folder that contains `app.py`. |
 | `No module named ...` | Repeat the package installation command, then launch using `.\.venv\Scripts\python.exe app.py` so installation and launch use the same environment. |
 | Package download fails | Check internet access and read the final pip error. Retry installation. If asking for help, include the command and error text. |
-| Launcher closes or no window appears | Run the terminal launch command from step 5 to see the error. Confirm Python is 64-bit 3.12. For graphics errors, check your graphics driver supports Direct3D 11. |
-| No generated sound | Check Windows volume, the default output device, PLAY AUDIO, and MIX output level. Close other software that may have exclusive use of the device. For MIDI, also check the source, connection, channel, and MIDI gain. |
-| System trace stays blank | Confirm music is playing and the selected endpoint matches its actual output. Refresh the device list; stop/restart capture after changing devices or the Windows default. |
-| Trace looks unexpectedly distorted or differs between devices | Check that endpoint's Windows audio enhancements/effects and spatial sound. They can change the captured waveform. See **About → Audio troubleshooting** for steps and measured examples. |
+| Launcher closes or no window appears | Run `app.py` from a terminal (see [Run from source](#run-from-source)) to see the error. Confirm Python is 64-bit 3.12. For graphics errors, check your graphics driver supports Direct3D 11. |
+| The downloaded app won't open | The apps aren't signed by Apple or Microsoft; see [Download](#download) for the one-time steps. |
+| No generated sound | Check the system volume and **Signal output › Output device**, then **Play** and **Mix › Output level**. Close other software that may have exclusive use of the device. For MIDI, also check the source, connection, channel and MIDI gain. |
+| Play takes a moment to start | With many audio tracks with effects, the app decodes the clips and warms up the effects before sound starts (about 0.8 s for eight tracks with a loop). |
+| An audio clip is silent or marked missing | Its file is still loading, or it has moved. Use **Locate file…** in the clip's menu or the Missing audio files dialog, and **Collect media** to keep a project's files beside it. |
+| System trace stays blank | Confirm music is playing and the selected endpoint matches its actual output. Refresh the device list; stop and restart capture after changing devices or the Windows default. |
+| Trace looks unexpectedly distorted or differs between devices | Check that endpoint's Windows audio enhancements/effects and spatial sound. They can change the captured waveform. See **About › Audio troubleshooting** for steps and measured examples. |
 | Other apps go silent during Live MIDI | This is WASAPI exclusive mode on Windows. Stop audio to release the device. |
-| Trace is too dim or too bright | Adjust **Phosphor brightness** under the scope, or set **Phosphor display** to Off for the line trace. |
-| A scene won't open | Scene files from builds before version 8 (phosphor 0.31.0) are rejected. Rebuild the scene in this build. |
-| Preview is slow | Try interpolation Off, shorter/zero glow decay, lower glow size, or fewer shapes. These appearance changes do not alter playback samples. |
+| Trace is too dim or too bright | Adjust **Phosphor brightness** in the status strip, or set **Phosphor display** to Off for the line trace. |
+| A scene or project won't open | This build opens scene versions 11–24 and project versions 1–12. Files saved by a newer build don't open in an older one. |
+| Preview is slow | Try interpolation Off, a 60 Hz display rate, shorter or zero glow decay, a smaller glow, or fewer objects. These appearance changes do not alter playback samples. |
 
 On the development PC, turning off Realtek audio effects restored waveform
 fidelity while measured preview frame rate stayed approximately the same. This
 is a finding from that setup, not a guarantee about every device. The app does
 not change Windows sound settings for you.
 
-A source checkout can also run the retained CPU interface with `python app.py --cpu`.
-It requires Tkinter, is not included in the packaged apps, and does not render
-every newer Qt visual effect.
+## Updating without losing settings
+
+Close the app first. Back up your scenes, projects and recordings, and your settings
+folder: `.user` in the source folder, `~/Library/Application Support/phosphor` for the
+Mac app, or `%APPDATA%\phosphor` for the Windows app.
+
+- **Downloaded app:** replace the app with the new one. Settings stay in the per-user
+  folder above.
+- **Git clone:** with no local source edits, run `git pull`, then run the package
+  installation command again. Resolve local source changes before updating.
+- **Downloaded ZIP of the source:** extract the new version into a separate folder,
+  repeat the environment setup, and copy your `.user` folder across while the app is
+  closed. Keep the old folder until the new one works.
+
+Each source folder needs its own environment. Do not copy `.venv` between computers or
+between Windows and macOS. Documents and preferences are separate files; they are not
+backed up to GitHub automatically.
 
 ## Validation
+
 
 Run from the source folder in the environment above:
 
 ```sh
-python -m unittest discover -s tests/unit -t .
-python tools/check_core.py
-python tests/smoke/smoke_qt_editor.py
-python tests/smoke/smoke_responsive_text.py
-python tests/smoke/smoke_view_modes.py
-python tests/smoke/smoke_shape_builder.py
-python tests/smoke/smoke_curve_builder.py
-python tests/smoke/smoke_builder_selection.py
-python tests/smoke/smoke_motion_paths.py
-python tests/smoke/smoke_drawing_motion.py
-python tests/smoke/smoke_signal_output.py
-python tests/smoke/smoke_phosphor.py
-python tests/smoke/smoke_time_sweep.py
-python tests/smoke/smoke_builder_quit.py
+python tools/check_core.py                       # fast: the Qt-free modules
+python -m unittest discover -s tests/unit -t .   # the full unit suite
+python tools/golden_audio.py --check             # audio stays byte-identical
+python tools/run_smokes.py --scale 1 1.5         # every GUI smoke, each in a fresh process
 ```
 
-Judge smokes by exit code, not their last line: a shutdown crash comes after the pass
-message. Run them in a normal desktop session: most also accept `--headless`, but
-offscreen runs don't prove native rendering or input. CI runs the core tests on macOS
-and Windows before building the apps.
+`run_smokes` judges each smoke by its exit code (a shutdown crash comes after the pass
+message) and fails a smoke whose drawing raised an exception. Run it in a normal
+desktop session and leave the desktop alone meanwhile: `--headless` runs offscreen,
+which doesn't prove native rendering or input. `--only NAME` runs one smoke.
 
-See [performance measurements](docs/PERFORMANCE.md) for exact conditions and limits, the
-[change history](CHANGELOG.md), the [full application guide](GUIDE.md) and the
+For performance work, `tools/bench_performance.py` and `tools/measure_pacing.py`
+measure render, display and playback pacing (including stress cases with 20,000 notes,
+a fully automated 24-object scene and eight audio tracks with effects), and
+`tools/style_snapshots.py` compares the controls' look between versions.
+
+At 0.92.1 on Windows, 1,196 unit tests and all 114 smoke runs (57 smokes at scales 1
+and 1.5) passed natively, and golden audio was unchanged. CI runs `check_core` and builds
+both apps on every push.
+
+Still untested or uncalibrated: anything by ear, controller-to-speaker MIDI latency as
+a measured figure, and brightness against a physical oscilloscope. The heaviest stress
+cases (a fully automated complex scene) don't yet render in real time.
+
+See [performance measurements](docs/PERFORMANCE.md) for exact conditions
+and limits, the [change history](CHANGELOG.md) and the
 [macOS development guide](docs/MACOS_DEVELOPMENT.md).
 
+Local Python environments, compiled capture helpers, preferences, recordings, reports
+and generated WAVs are excluded from Git. This repository publishes source and
+reproducible build instructions, not local dependency directories.
 ## License and credits
+
 
 phosphor is free software: you can redistribute it and/or modify it under the terms
 of the [GNU General Public License, version 3](LICENSE) or (at your option) any later
@@ -649,7 +707,7 @@ The packaged apps include third-party software under its own licenses; see
 separate, replaceable libraries. The JetBrains Mono font is under the
 [SIL Open Font License](phosphor/assets/fonts/OFL.txt).
 
-phosphor bundles no music. MIDI files you open are read from your own disk; scenes
-store only their path.
+phosphor bundles no music. MIDI and audio files you open are read from your own disk;
+scenes and projects store only their paths.
 
 Created by Mike Le, with AI-assisted development using OpenAI Codex and Claude.

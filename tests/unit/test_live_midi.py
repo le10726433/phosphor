@@ -5,24 +5,26 @@ import unittest
 import wave
 import numpy as np
 from phosphor.audio.live_midi import LiveMidi, mido_module
-from phosphor.audio.midi_synth import FAMILIES, MidiSynth, MIDI_SOURCE, PRESETS, MAX_VOICES, coefficients, harmonic_series
+from phosphor.audio.midi_synth import MidiSynth, MIDI_SOURCE, NOTE_DECAYS, MAX_VOICES
 from phosphor.engine.signal_engine import Settings, Shape
 from phosphor.audio.audio_preview import AudioPreview
 
 mido = mido_module()
+CUBE = Settings(shapes=(Shape(),))  # Shaped voices need a scene object.
 
 
 class MidiSynthTests(unittest.TestCase):
-    def test_harmonic_series_matches_the_direct_sum(self):
-        phase = np.random.default_rng(7).random(512) * 40
-        for family in FAMILIES:
-            coeff = coefficients(family)
-            for audible in (1, 2, 7, len(coeff)):
-                direct = sum(2 * np.real(value * np.exp(2j * np.pi * harmonic * phase))
-                             for harmonic, value in enumerate(coeff[:audible], 1))
-                np.testing.assert_allclose(harmonic_series(coeff[:audible], phase), direct, atol=1e-13)
-        np.testing.assert_array_equal(harmonic_series(np.zeros(4, complex), phase), np.zeros(len(phase)))
-        np.testing.assert_array_equal(harmonic_series(np.zeros(0, complex), phase), np.zeros(len(phase)))
+    def test_original_sound_is_a_sine_at_the_voice_pitch(self):
+        synth = MidiSynth()
+        synth.handle(mido.Message('note_on', note=69, velocity=127))
+        times = np.arange(4800) / 48000
+        original = synth.render(times, CUBE)[1][:, 0]
+        # Past the 10.5 ms attack the envelope is flat, so the waveform is a pure 440 Hz sine.
+        later = slice(600, 4800)
+        expected = np.sin(2 * np.pi * 440 * times[later])
+        scale = original[later] @ expected / (expected @ expected)
+        np.testing.assert_allclose(original[later], scale * expected, atol=1e-9)
+        self.assertGreater(scale, 0)
 
     def test_input_gain_scales_both_signals_without_changing_pitch_or_velocity(self):
         times = np.arange(2048) / 48000
@@ -43,7 +45,7 @@ class MidiSynthTests(unittest.TestCase):
         synth = MidiSynth()
         synth.handle(mido.Message('note_on', channel=0, note=60, velocity=100))
         synth.handle(mido.Message('note_on', channel=1, note=60, velocity=50))
-        synth.render(np.arange(1024) / 48000, Settings())
+        synth.render(np.arange(1024) / 48000, CUBE)
         synth.handle(mido.Message('control_change', channel=0, control=64, value=127))
         synth.handle(mido.Message('note_on', channel=0, note=60, velocity=0))
         self.assertFalse(synth.voices[0].held)
@@ -51,7 +53,7 @@ class MidiSynthTests(unittest.TestCase):
         self.assertTrue(synth.voices[1].held)
         synth.handle(mido.Message('control_change', channel=0, control=64, value=0))
         self.assertIsNotNone(synth.voices[0].release_age)
-        synth.render(np.arange(16000) / 48000, Settings())
+        synth.render(np.arange(16000) / 48000, CUBE)
         self.assertEqual([v.channel for v in synth.voices], [1])
 
     def test_sostenuto_latches_only_notes_already_held(self):
@@ -68,7 +70,7 @@ class MidiSynthTests(unittest.TestCase):
 
     def test_voice_limit_filter_and_panic(self):
         synth = MidiSynth()
-        synth.set_options('Pulse (long)', 1)
+        synth.set_options('Sustained', 1)
         self.assertFalse(synth.handle(mido.Message('note_on', channel=0, note=50)))
         for note in range(60, 70):
             synth.handle(mido.Message('note_on', channel=1, note=note))
@@ -76,15 +78,15 @@ class MidiSynthTests(unittest.TestCase):
         self.assertEqual([v.note for v in active], list(range(62, 70)))
         self.assertEqual(synth.stolen, 2)
         # Stolen voices fade out briefly rather than stopping mid-cycle, then are removed.
-        settings = Settings()
+        settings = CUBE
         synth.render(np.arange(480)/48000, settings)
         self.assertEqual(len(synth.voices), MAX_VOICES)
-        synth.set_options('Sine (short)', 0)
+        synth.set_options('Plucked', 0)
         self.assertEqual(synth.voices, [])
 
     def test_stolen_voice_fades_without_a_jump(self):
-        synth, settings = MidiSynth(), Settings()
-        synth.set_options('Sine (long)', -1)
+        synth, settings = MidiSynth(), CUBE
+        synth.set_options('Sustained', -1)
         for note in range(60, 68):
             synth.handle(mido.Message('note_on', note=note, velocity=127))
         played = synth.render(np.arange(4800)/48000, settings)[1][:, 0]
@@ -96,7 +98,7 @@ class MidiSynthTests(unittest.TestCase):
         self.assertEqual(sum(v.stolen_age is None for v in synth.voices), MAX_VOICES)
 
     def test_continuous_phase_bend_and_octave_alternation(self):
-        settings = Settings()
+        settings = CUBE
         def run(bend=0, mod=0):
             synth = MidiSynth()
             synth.handle(mido.Message('note_on', note=69, velocity=127))
@@ -116,11 +118,12 @@ class MidiSynthTests(unittest.TestCase):
         chunks = np.concatenate([b.render(times[:1234], settings)[1], b.render(times[1234:], settings)[1]])
         np.testing.assert_allclose(whole, chunks, atol=1e-12)
 
-    def test_presets_and_eight_voice_headroom(self):
+    def test_note_decays_and_eight_voice_headroom(self):
         settings = Settings(shapes=(Shape(position_x=.5, shape_size=.5), Shape('Octahedron', -.5, 0, .5, spin_y=1/7)))
-        for preset in PRESETS:
+        with self.assertRaises(ValueError): MidiSynth().set_options('Sine (long)', -1)
+        for decay in NOTE_DECAYS:
             synth = MidiSynth()
-            synth.set_options(preset, -1)
+            synth.set_options(decay, -1)
             for note in range(60, 68):
                 synth.handle(mido.Message('note_on', note=note, velocity=127))
             drawing, original, output = synth.render(np.arange(2048) / 48000, settings)
@@ -136,7 +139,7 @@ class RecordingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent) as folder:
             player = AudioPreview()
             player.live = True
-            settings = Settings(source=MIDI_SOURCE, midi_gain=16)
+            settings = Settings(source=MIDI_SOURCE, midi_gain=16, shapes=(Shape(),))
             player.parameters = (settings, 'mixed')
             player.midi.reset(48000)
             path = Path(folder) / 'loud.wav'

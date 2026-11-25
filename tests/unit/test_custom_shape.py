@@ -8,6 +8,7 @@ from phosphor.engine.custom_shape import Drawing,compiled,CUSTOM_OBJECT,MAX_NODE
 from phosphor.engine.signal_engine import Shape,Settings,render,planned_path
 from phosphor.storage.app_files import read_scene,scene_document,atomic_json
 from phosphor.engine.scene_path import TRAVEL_MODES
+from phosphor.storage.app_files import SCENE_VERSION
 
 class CustomShapeTests(unittest.TestCase):
     def setUp(self):
@@ -52,14 +53,14 @@ class CustomShapeTests(unittest.TestCase):
         pieces=np.concatenate([render(t,settings)[2] for t in np.array_split(times,47)])
         np.testing.assert_allclose(full,pieces,atol=1e-12)
         document=scene_document(settings,'drawing','')
-        self.assertEqual(document['version'],10)
+        self.assertEqual(document['version'], SCENE_VERSION)
         with tempfile.TemporaryDirectory() as folder:
             path=Path(folder)/'custom.scene.json';atomic_json(path,document);loaded,_,_=read_scene(path)
         self.assertEqual(loaded.shapes,settings.shapes)
         # Hardware calibration is deliberately not in scene files.
         np.testing.assert_array_equal(render(times,replace(loaded,corner_dwell_us=80.))[2],full)
-        self.assertEqual(scene_document(Settings(),'mixed','')['version'],10)
-        self.assertNotIn('custom',scene_document(Settings(),'mixed','')['shapes'][0])
+        self.assertEqual(scene_document(Settings(),'mixed','')['version'], SCENE_VERSION)
+        self.assertNotIn('custom',scene_document(Settings(shapes=(Shape(),)),'mixed','')['shapes'][0])
 
     def test_reject_bad_graphs_and_bound_geometry(self):
         invalid=[replace(self.outline,nodes=((0,float('nan'),0),)),

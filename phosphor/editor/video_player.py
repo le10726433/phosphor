@@ -11,6 +11,8 @@ from PySide6.QtCore import Qt, Signal, QUrl, QSignalBlocker
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider,
                                QCheckBox, QFileDialog)
 
+from phosphor.editor.panel_widgets import InlineCaption
+
 VIDEO_FILTER = 'Video files (*.mp4 *.m4v *.mov *.mkv *.avi *.webm *.wmv *.ogv *.mpg *.mpeg);;All files (*)'
 SCAN_LINES = {'240 lines (low-res)': 240, '480 lines (NTSC)': 480, '576 lines (PAL)': 576, '720 lines (fine)': 720}
 DEFAULT_SCAN = '480 lines (NTSC)'
@@ -82,11 +84,11 @@ class VideoPanel(QWidget):
         self.seek.sliderReleased.connect(self.seek_released); self.seek.sliderMoved.connect(self.seek_moved); row.addWidget(self.seek, 1)
         self.time = QLabel(clock(0)+' / '+clock(0)); self.time.setProperty('inlineCaption', True); row.addWidget(self.time)
         row = QHBoxLayout(); layout.addLayout(row)
-        caption = QLabel('Volume'); caption.setProperty('inlineCaption', True); caption.setFixedWidth(104); row.addWidget(caption)
+        caption = InlineCaption('Volume'); row.addWidget(caption)
         self.volume = slider_class(.8, 0., 1.); self.volume.setObjectName('video_volume'); self.volume.setFixedHeight(28)
         self.volume.edited.connect(self.volume_edited); row.addWidget(self.volume, 1)
         row = QHBoxLayout(); layout.addLayout(row)
-        caption = QLabel('Raster'); caption.setProperty('inlineCaption', True); caption.setFixedWidth(104); row.addWidget(caption)
+        caption = InlineCaption('Raster'); row.addWidget(caption)
         self.scan = QComboBox(); self.scan.setObjectName('video_scan_lines'); self.scan.addItems(SCAN_LINES); self.scan.setCurrentText(DEFAULT_SCAN)
         row.addWidget(self.scan, 1)
         self.loop = QCheckBox('Loop'); self.loop.setObjectName('video_loop'); self.loop.toggled.connect(self.loop_toggled); layout.addWidget(self.loop)

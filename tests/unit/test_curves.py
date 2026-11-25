@@ -9,6 +9,7 @@ from phosphor.engine.curve_geometry import CURVE_ERROR,curve_spans
 from phosphor.engine.signal_engine import Settings,Shape,render,planned_path
 from phosphor.engine.corner_dwell import corner_positions
 from phosphor.storage.app_files import scene_document,read_scene,atomic_json
+from phosphor.storage.app_files import SCENE_VERSION
 
 class CurveTests(unittest.TestCase):
     def arc(self):return Drawing('Arc',((0,-1,0),(1,0,1),(2,1,0)),(),(Curve('Arc',(0,1,2)),))
@@ -70,7 +71,7 @@ class CurveTests(unittest.TestCase):
         drawing=Drawing('Mixed',nodes,((0,3),),(Curve('Arc',(0,1,2)),Curve('Semicircle',(2,3),-1),Curve('Spline',(3,1,2))))
         settings=replace(Settings(),shapes=(Shape(solid=CUSTOM_OBJECT,custom=drawing),),corner_dwell_us=40.)
         document=scene_document(settings,'drawing','')
-        self.assertEqual(document['version'],10)
+        self.assertEqual(document['version'], SCENE_VERSION)
         self.assertEqual(Drawing.read(drawing.document()),drawing)
         with tempfile.TemporaryDirectory() as folder:
             p=Path(folder)/'curves.scene.json';atomic_json(p,document);loaded,_,_=read_scene(p)
@@ -93,7 +94,7 @@ class CurveTests(unittest.TestCase):
              replace(d,nodes=((0,-1,0),(1,0,0),(2,1,0)))]
         for graph in bad:
             with self.subTest(graph=graph),self.assertRaises(ValueError):graph.validate()
-        huge=replace(d,nodes=((0,-100,0),(1,0,100),(2,100,0)),curves=(Curve('Arc',(0,1,2)),)*20)
+        huge=replace(d,nodes=((0,-100,0),(1,0,100),(2,100,0)),curves=(Curve('Arc',(0,1,2)),)*240)  # 288 points each, over the 65536-point limit.
         with self.assertRaises(ValueError):compiled(huge)
         settings=replace(Settings(),shapes=(Shape(solid=CUSTOM_OBJECT,custom=huge),))
         with tempfile.TemporaryDirectory() as folder:

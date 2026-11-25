@@ -8,14 +8,14 @@ import json
 import threading
 import time
 from phosphor.audio.audio_preview import AudioPreview
-from phosphor.engine.signal_engine import Settings
+from phosphor.engine.signal_engine import Settings, Shape
 from phosphor.audio.score_source import SCALE_NAME
 
 
 def measure(block_frames):
     player = AudioPreview()
     player.BLOCK_FRAMES = block_frames
-    player.parameters = (Settings(source=SCALE_NAME), 'mixed')
+    player.parameters = (Settings(source=SCALE_NAME, shapes=(Shape(),)), 'mixed')
 
     class PacedStream:
         def __init__(self): self.deadline = time.perf_counter()

@@ -1,0 +1,40 @@
+{
+  "header": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "cpu_count": 10,
+    "python": "3.12.16",
+    "numpy": "2.5.4",
+    "pyside6": "6.10.3",
+    "graphics_api": "GraphicsApi.Metal",
+    "numba": "0.68.1"
+  },
+  "model_simplify": {
+    "numba_compile_ms": 1441.64641702082,
+    "dense_source_triangles": 5000,
+    "dense_1000_result_triangles": 1000,
+    "dense_1000_simplify_median": 32.41887499461882,
+    "dense_1000_simplify_p90": 32.69606700632721,
+    "dense_1000_import": 38.280165987089276,
+    "dense_1000_kept_edges": 684,
+    "dense_1000_python_ms": 1107.6952920120675,
+    "dense_200k_source_triangles": 199680,
+    "dense_200k_10000_result_triangles": 10000,
+    "dense_200k_10000_simplify_median": 1790.746541984845,
+    "dense_200k_10000_simplify_p90": 1838.7491249945015,
+    "dense_200k_10000_import": 1983.1272920127958,
+    "dense_200k_10000_kept_edges": 6944,
+    "charizard_5000tri_source_triangles": 5000,
+    "charizard_5000tri_1000_result_triangles": 1000,
+    "charizard_5000tri_1000_simplify_median": 37.29679199750535,
+    "charizard_5000tri_1000_simplify_p90": 37.388591800117865,
+    "charizard_5000tri_1000_import": 43.282166006974876,
+    "charizard_5000tri_1000_kept_edges": 629,
+    "charizard_5000tri_1000_python_ms": 1018.884374992922,
+    "charizard_5000tri_2500_result_triangles": 2500,
+    "charizard_5000tri_2500_simplify_median": 26.20133399614133,
+    "charizard_5000tri_2500_simplify_p90": 26.348649995634332,
+    "charizard_5000tri_2500_import": 35.64500002539717,
+    "charizard_5000tri_2500_kept_edges": 1060,
+    "charizard_5000tri_2500_python_ms": 683.0620410037227
+  }
+}

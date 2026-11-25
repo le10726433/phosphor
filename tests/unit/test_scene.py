@@ -28,7 +28,7 @@ class SceneTests(unittest.TestCase):
         split = np.concatenate([render(times[:3431], settings)[2], render(times[3431:], settings)[2]])
         np.testing.assert_array_equal(whole, split)
         self.assertLessEqual(abs(whole).max(), .95)
-        single = render(times, Settings())[2]
+        single = render(times, Settings(shapes=(Shape(),)))[2]
         self.assertFalse(np.allclose(whole, single))
 
     def test_every_shape_is_checked_for_headroom_and_rotation(self):
@@ -38,11 +38,10 @@ class SceneTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate(Settings(shapes=(Shape(), bad)))
 
-    def test_legacy_single_shape_and_scene_agree(self):
-        times = np.arange(4000) / 48000
-        legacy = Settings(solid='Octahedron', position_x=.3, shape_size=.6, rotation_y=9)
-        scene = Settings(shapes=(Shape('Octahedron', .3, 0, .6, rotation_y=9),))
-        np.testing.assert_array_equal(render(times, legacy)[2], render(times, scene)[2])
+    def test_settings_hold_only_scene_objects(self):
+        for legacy in ('solid', 'position_x', 'shape_size', 'rotation_y', 'midi_preset'):
+            with self.subTest(field=legacy), self.assertRaises(TypeError): Settings(**{legacy: 1})
+        self.assertEqual(Settings().shapes, ())
 
 
 if __name__ == '__main__':
