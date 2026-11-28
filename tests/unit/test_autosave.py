@@ -233,7 +233,7 @@ class RecoveryWriterTests(unittest.TestCase):
     def test_gui_thread_cost_20k_notes(self):
         """The GUI thread only hands over references; serialization runs on the worker."""
         project = replace(new_project(), notes=tuple(Note(k * .25, .24, 60 + k % 8) for k in range(20000)))
-        costs, gaps = [], []
+        costs, gaps, writes = [], [], []
         for k in range(3):
             revision = replace(project, bpm=100. + k)
             start = time.perf_counter()
@@ -243,8 +243,10 @@ class RecoveryWriterTests(unittest.TestCase):
             while not job.done.is_set():  # The GUI thread keeps running Python meanwhile.
                 sum(range(200)); now = time.perf_counter()
                 gap, last = max(gap, now - last), now
-            gaps.append(gap)
+            gaps.append(gap); writes.append(time.perf_counter() - start)
         self.assertEqual(self.written, [100., 101., 102.])
         self.assertGreater(self.path.stat().st_size, 1_000_000)
         self.assertLess(statistics.median(costs), .003)
-        self.assertLess(statistics.median(gaps), .05)  # GIL hand-offs, never the whole write.
+        # GIL hand-offs, never the whole write: a slow machine (a shared CI runner) gets longer
+        # hand-offs but also longer writes, so the bound follows the write's own length.
+        self.assertLess(statistics.median(gaps), max(.05, statistics.median(writes)/2))
