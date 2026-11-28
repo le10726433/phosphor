@@ -25,6 +25,12 @@ from phosphor.engine.drawing_motion import set_role,reconcile,validate_routes,se
 CLIPBOARD_TYPE='application/x-phosphor-geometry+json'
 DRAW_WIDTH=1.6
 BOX_WIDTH=DRAW_WIDTH/2
+TOOL_SHORTCUTS = {
+    Qt.Key.Key_V: 'Select', Qt.Key.Key_L: 'Line', Qt.Key.Key_P: 'Polyline',
+    Qt.Key.Key_A: 'Arc', Qt.Key.Key_S: 'Semicircle', Qt.Key.Key_B: 'Spline',
+    Qt.Key.Key_C: 'Circle', Qt.Key.Key_T: 'Text',
+}
+TOOL_KEYS = {tool: QKeySequence(key).toString() for key, tool in TOOL_SHORTCUTS.items()}
 
 
 class ConstructionCanvas(GpuScope):
@@ -100,6 +106,7 @@ class ConstructionCanvas(GpuScope):
         return super().event(event)
 
     def keyPressEvent(self,event):
+        plain = not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier))
         if event.key()==Qt.Key.Key_Escape:self.editor.cancel_gesture()
         elif event.key() in (Qt.Key.Key_Return,Qt.Key.Key_Enter):self.editor.finish_stroke()
         elif event.key() in (Qt.Key.Key_Delete,Qt.Key.Key_Backspace):self.editor.delete_selection()
@@ -108,6 +115,8 @@ class ConstructionCanvas(GpuScope):
         elif event.matches(QKeySequence.StandardKey.Copy):self.editor.copy_selection()
         elif event.matches(QKeySequence.StandardKey.Cut):self.editor.cut_selection()
         elif event.matches(QKeySequence.StandardKey.Paste):self.editor.paste_selection()
+        elif plain and event.key() in TOOL_SHORTCUTS:self.editor.set_tool(TOOL_SHORTCUTS[event.key()])
+        elif plain and event.key() in (Qt.Key.Key_F, Qt.Key.Key_0):self.editor.fit()
         else:super().keyPressEvent(event);return
         event.accept()
 
@@ -235,8 +244,9 @@ class ShapeBuilder(QWidget):
         tools=QHBoxLayout();outer.addLayout(tools);self.tools={}
         for name in ('Select','Line','Polyline','Arc','Semicircle','Spline','Circle','Text'):
             button=QPushButton(name);button.setCheckable(True);button.clicked.connect(lambda checked=False,n=name:self.set_tool(n))
+            if name in TOOL_KEYS: button.setToolTip(f'{name} ({TOOL_KEYS[name]})')
             self.tools[name]=button;tools.addWidget(button)
-        tools.addStretch();fit=QPushButton('Fit');fit.clicked.connect(self.fit);tools.addWidget(fit)
+        tools.addStretch();fit=QPushButton('Fit');fit.setToolTip('Fit drawing to view (F or 0)');fit.clicked.connect(self.fit);tools.addWidget(fit)
         tools=QHBoxLayout();outer.addLayout(tools)
         self.undo_button=QPushButton('Undo');self.undo_button.clicked.connect(self.undo);tools.addWidget(self.undo_button)
         self.redo_button=QPushButton('Redo');self.redo_button.clicked.connect(self.redo);tools.addWidget(self.redo_button)
@@ -306,7 +316,10 @@ class ShapeBuilder(QWidget):
         # Native window containers can temporarily lose their Quick focus item.
         # Handle canvas commands at the window boundary, not text-entry widgets.
         if watched is self.view and event.type()==QEvent.Type.KeyPress:
-            if event.key() in (Qt.Key.Key_Escape,Qt.Key.Key_Return,Qt.Key.Key_Enter,Qt.Key.Key_Delete,Qt.Key.Key_Backspace) or any(event.matches(key) for key in (QKeySequence.StandardKey.Undo,QKeySequence.StandardKey.Redo,QKeySequence.StandardKey.Copy,QKeySequence.StandardKey.Cut,QKeySequence.StandardKey.Paste)):
+            plain = not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier))
+            if (event.key() in (Qt.Key.Key_Escape,Qt.Key.Key_Return,Qt.Key.Key_Enter,Qt.Key.Key_Delete,Qt.Key.Key_Backspace)
+                    or (plain and (event.key() in TOOL_SHORTCUTS or event.key() in (Qt.Key.Key_F, Qt.Key.Key_0)))
+                    or any(event.matches(key) for key in (QKeySequence.StandardKey.Undo,QKeySequence.StandardKey.Redo,QKeySequence.StandardKey.Copy,QKeySequence.StandardKey.Cut,QKeySequence.StandardKey.Paste))):
                 self.canvas.keyPressEvent(event);return True
         return super().eventFilter(watched,event)
 

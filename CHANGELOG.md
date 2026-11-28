@@ -1,5 +1,44 @@
 # Application changes
 
+## 0.93.2 — Graphics quality, the 3D Lab Bench, a larger Library and Quick Add (November 27, 2026)
+
+**Compatibility:** scenes now use version 25 and still open from version 11 (0.92.1
+opens up to 24). Projects stay at version 12. Audio from existing scenes is unchanged.
+
+- **Graphics quality:** **Appearance › Quality** chooses Low, Medium, High (the default)
+  or Ultra. Medium adds soft saturation; High and Ultra add a long power-law afterglow
+  tail, P7's flash-to-afterglow cascade, tone mixing in linear light, a faceplate halo and
+  a glass vignette; Ultra's halo is stronger and darkens the trace under graticule lines. Grids
+  can be drawn as a graticule. Settings a tier ignores are greyed out.
+- **Afterglow at any refresh rate:** the afterglow fades the same at 60, 144 and 240 Hz
+  and in video export, and dim traces fade to black at every rate (before, they could
+  stay lit at high refresh rates). The decay editor's plot matches the screen on every
+  tier.
+- **3D Lab Bench:** **View › 3D Lab Bench** (⌃⌘3 or Ctrl+Shift+3) shows the scope as a
+  late-1980s bench oscilloscope in a lit 3D lab, with working knobs, coax cables, props
+  and reflections. From source, an optional live GPU path tracer renders the bench
+  (`requirements/requirements-raytrace.txt`; T toggles it).
+- **Vintage style:** a warm beige hardware panel with photorealistic controls, beside
+  Classic and Modern.
+- **Library:** more built-in solids (torus, knots, Möbius strip, tesseract, geodesic
+  sphere, prism, pyramid), 2D shapes and curves; a configurable Star and Gear; an
+  animated Radar and Clock; Matrix rain; 12 parametric and 10 recurrence presets; and a
+  reorganized catalog in one Browser.
+- **Transforms:** new steps including Gridify, Radial array, Kaleidoscope, Echo,
+  Pointify, Subdivide, Glitch, Wave and Attractor. Muted and switched-off objects show
+  outlines that follow their animated transforms.
+- **Quick Add** (⌘K or Ctrl+K) searches objects, equations, transforms and recipes and
+  adds the one you pick. Also inline f and automate pills on fields, pinned placement,
+  clip templates, a transform roll picker and equation editor polish.
+- **Composer:** Add clip is a split button, the transport stays on one row, and the scene
+  banner's bar numbers follow time-signature changes.
+- **Performance:** faster display, phosphor and editor paths, and a vectorized per-frame
+  scene plan.
+- **Preferences** from a newer version with an unknown quality or grid style fall back to
+  the default instead of being rejected.
+- **Manual:** **Signal output › Route minimizing** notes that Radar, Clock and Matrix keep
+  their own animated route.
+
 ## 0.92.1 — Composer, audio tracks and effects, transforms, and the user manual (November 25, 2026)
 
 The first public release since 0.36.1. The full illustrated manual is in

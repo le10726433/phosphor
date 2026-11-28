@@ -17,19 +17,22 @@ Add › Saved › Rename…/Delete… manage the user's file (storage/transform_
 from dataclasses import replace
 import math
 
-from PySide6.QtCore import Qt, Signal, QSignalBlocker
-from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox,
+from PySide6.QtCore import Qt, Signal, QSignalBlocker, QTimer
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox,
                                QListWidget, QListWidgetItem, QMenu, QCheckBox, QSpinBox, QDoubleSpinBox, QSizePolicy,
-                               QInputDialog, QMessageBox)
+                               QInputDialog, QMessageBox, QToolButton)
 
-from phosphor.engine.transforms import (KINDS, FIELDS, HELP, MOTION_PATH, MOTION_PRESETS, MAX_TRANSFORMS,
-                                        Param, Field, new_transform, with_motion_preset, validate_stack, compiled_expression,
+from phosphor.engine.solids import LOW_POLY_SOLIDS
+from phosphor.engine.transforms import (KINDS, TRANSFORM_GROUPS, DEFORM_NEEDS_SUBDIVIDE, SUBDIVIDE, FIELDS, HELP,
+                                        MOTION_PATH, MOTION_PRESETS, MAX_TRANSFORMS,
+                                        Param, Field, Transform, new_transform, with_motion_preset, validate_stack, compiled_expression,
                                         field_label, NOISE, COLOURS, RATES, NoiseOptions, curve_of,
                                         MAP, MAP_PRESETS, with_map_preset, is_identity, Variable, MAX_OBJECT_VARIABLES,
                                         TRANSFORM_RESERVED, VARIABLE_EXPRESSION_HELP, check_variable_name,
                                         validate_object_variables, new_variable_name, variable_names, renamed_variable,
                                         validate_path)
-from phosphor.engine.transform_presets import STEP, STACK, APPEND, REPLACE, make_preset, inserted
+from phosphor.engine.matrix_rain import validate_matrix
+from phosphor.engine.transform_presets import STEP, STACK, APPEND, REPLACE, BUILTIN_RECIPES, make_preset, inserted
 from phosphor.editor.noise_editor import SpectrumPlot
 from phosphor.storage.noise_presets import read_noise_presets, save_noise_preset, delete_noise_preset
 from phosphor.storage.transform_presets import (read_transform_presets, save_transform_preset,
@@ -82,11 +85,12 @@ class ParamField(QWidget):
     changed = Signal(object)  # Param
     automate = Signal(bool)  # Automate (True) or Remove automation (False) from the menu.
 
-    def __init__(self, slider_class, field, help=None, placeholder='f(x, y, z, t, s)', caption_width=104):
+    def __init__(self, slider_class, field, help=None, placeholder='f(x, y, z, t, s)', caption_width=92):
         super().__init__()
         self.field, self.param = field, Param(field.default)
-        self.automation_allowed = False  # Composer only: Sandbox has no timeline.
-        row = QHBoxLayout(self); row.setContentsMargins(0, 0, 0, 0)
+        self._automation_allowed = False  # Composer only: Sandbox has no timeline.
+        self.fx_button = self.auto_button = None
+        row = QHBoxLayout(self); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(3)
         self.caption = InlineCaption(field.label, caption_width)
         row.addWidget(self.caption)
         if field.toggle:
@@ -107,9 +111,43 @@ class ParamField(QWidget):
         self.expression.setPlaceholderText(placeholder)
         self.expression.editingFinished.connect(self.expression_edited)
         row.addWidget(self.slider, 1); row.addWidget(self.expression, 1); self.expression.hide()
+        # Compact inline Formula (ƒ) & Automation (◆) micro-pills (also accessible via right-click).
+        self.fx_button = QToolButton(self); self.fx_button.setObjectName('param_fx_btn')
+        self.fx_button.setText('ƒ'); self.fx_button.setCheckable(True); self.fx_button.setFixedSize(22, 24)
+        self.fx_button.setToolTip('Toggle Time-varying formula expression (or right-click)')
+        self.fx_button.clicked.connect(self._toggle_fx)
+        row.addWidget(self.fx_button)
+        self.auto_button = QToolButton(self); self.auto_button.setObjectName('param_auto_btn')
+        self.auto_button.setText('◆'); self.auto_button.setCheckable(True); self.auto_button.setFixedSize(22, 24)
+        self.auto_button.setToolTip('Toggle Composer automation gain lane (or right-click)')
+        self.auto_button.clicked.connect(self._toggle_auto)
+        self.auto_button.hide()
+        row.addWidget(self.auto_button)
         for widget in (self, self.caption, self.slider, self.slider.slider, self.slider.entry, self.expression):
             widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             widget.customContextMenuRequested.connect(lambda point, widget=widget: self.menu(widget.mapToGlobal(point)))
+
+    @property
+    def automation_allowed(self):
+        return self._automation_allowed
+
+    @automation_allowed.setter
+    def automation_allowed(self, allowed):
+        self._automation_allowed = bool(allowed)
+        if self.auto_button is not None:
+            self.auto_button.setVisible(self._automation_allowed)
+
+    def _toggle_fx(self, checked):
+        if checked and not self.varying:
+            self.make_varying()
+        elif not checked and self.varying:
+            self.changed.emit(replace(self.param, expression=''))
+
+    def _toggle_auto(self, checked):
+        if self.auto_button is not None:
+            blocker = QSignalBlocker(self.auto_button); self.auto_button.setChecked(self.automated)
+        if self._automation_allowed:
+            self.automate.emit(not self.automated)
 
     @property
     def varying(self): return bool(self.param.expression)
@@ -131,8 +169,12 @@ class ParamField(QWidget):
         if self.expression.text() != param.expression:  # Unchanged text: setText costs ~0.25 ms.
             blocker = QSignalBlocker(self.expression); self.expression.setText(param.expression)
         self.slider.setVisible(not self.varying); self.expression.setVisible(self.varying)
+        if self.fx_button is not None:
+            blocker = QSignalBlocker(self.fx_button); self.fx_button.setChecked(self.varying)
+        if self.auto_button is not None:
+            blocker = QSignalBlocker(self.auto_button); self.auto_button.setChecked(self.automated)
         self.caption.setText((AUTOMATED if self.automated else '') + ('ƒ ' if self.varying else '') + self.field.label)
-        tip = 'Time varying; right-click for Static.' if self.varying else 'Right-click for Time varying….'
+        tip = 'Time varying; click ƒ or right-click for Static.' if self.varying else 'Click ƒ or right-click for Time varying….'
         if self.automated: tip += '\nAutomated: a gain lane in the timeline multiplies this number.'
         self.caption.setToolTip(tip)
 
@@ -189,9 +231,11 @@ class TransformPanel(QWidget):
         super().__init__()
         self.stack, self.current = (), -1
         self.solo_index = None
+        self._target_solid = ''
         self.automation_allowed = False  # Composer only: Sandbox has no timeline.
         self.slider_class = slider_class
         self.variables, self.taken, self.path = (), {}, (Param(0.), Param(1.))
+        self.matrix = None  # A Matrix object's config: its speed expressions read the variables too.
         self.variable_rows = []
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(5)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -228,14 +272,27 @@ class TransformPanel(QWidget):
             row.addWidget(widget, 1); animation_layout.addLayout(row); self.animation_fields[key] = widget
         self.animation_fields['beats'].setToolTip('One loop takes this many project beats; 0 uses Speed.')
         layout.addWidget(self.animation_box); self.animation_box.hide()
-        self.list = QListWidget(); self.list.setObjectName('transform_list'); self.list.setMaximumHeight(66)
+        self.list = QListWidget(); self.list.setObjectName('transform_list'); self.list.setProperty('customRows', True)
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.list.setToolTip('Transforms in order, top runs first. Drag to reorder.')
         self.list.currentRowChanged.connect(self.select); self.list.itemChanged.connect(self.item_checked)
+        self.list.model().rowsMoved.connect(lambda parent, start, end, dest, row: self._rows_moved(start, row))
         layout.addWidget(self.list)
         row = FlowRow(); layout.addLayout(row)  # Wraps in a narrow panel (UI2).
         self.add_button = QPushButton('Add'); self.add_button.setObjectName('add_transform'); self.add_button.setToolTip('Add a transform after the selected one')
         menu = QMenu(self.add_button)
-        self.kind_actions = [menu.addAction(kind, lambda kind=kind: self.add(kind)) for kind in KINDS]
+        self.kind_actions = []
+        for group_name, group_kinds in TRANSFORM_GROUPS:
+            sub = menu.addMenu(group_name)
+            for kind in group_kinds:
+                self.kind_actions.append(sub.addAction(kind, lambda kind=kind: self.add(kind)))
         menu.addSeparator()
+        self.recipes_menu = menu.addMenu('Recipes'); self.recipes_menu.setObjectName('transform_recipes_menu')
+        for rname, rpreset in BUILTIN_RECIPES.items():
+            sub = self.recipes_menu.addMenu(rname)
+            sub.addAction('Append to stack', lambda n=rname: self.insert_recipe(n, APPEND))
+            sub.addAction('Replace stack', lambda n=rname: self.insert_recipe(n, REPLACE))
         self.saved_menu = menu.addMenu('Saved'); self.saved_menu.setObjectName('saved_transforms_menu')
         self.saved_menu.aboutToShow.connect(lambda: self.build_saved_menu(self.saved_menu))
         self.add_button.setMenu(menu); self.add_button.setProperty('menuButton', True)
@@ -255,6 +312,15 @@ class TransformPanel(QWidget):
             if len(text) == 1: button.setFixedWidth(34)
             row.addWidget(button); self.buttons[key] = button
         self.help = QLabel(); self.help.setWordWrap(True); self.help.setObjectName('transform_help'); layout.addWidget(self.help)
+        # Smart contextual helper: offer 1-click Subdivide above warp deformers on low-poly shapes
+        self.subdivide_bar = QWidget(); self.subdivide_bar.setObjectName('subdivide_hint_bar')
+        sub_row = FlowRow(); self.subdivide_bar.setLayout(sub_row)
+        sub_lbl = QLabel('Low-poly edges stay straight ·'); sub_lbl.setWordWrap(True)
+        self.insert_subdivide_btn = QPushButton('+ Insert Subdivide above'); self.insert_subdivide_btn.setObjectName('insert_subdivide_btn')
+        self.insert_subdivide_btn.setToolTip('Insert Subdivide (4 pieces/edge) right before this deformer so straight lines bend smoothly.')
+        self.insert_subdivide_btn.clicked.connect(self.insert_subdivide_above)
+        sub_row.addWidget(sub_lbl); sub_row.addWidget(self.insert_subdivide_btn)
+        layout.addWidget(self.subdivide_bar); self.subdivide_bar.hide()
         self.presets = QComboBox(); self.presets.setObjectName('motion_presets'); self.presets.addItem(PRESET_PROMPT)
         self.presets.addItems(list(MOTION_PRESETS)); self.presets.activated.connect(self.load_preset); layout.addWidget(self.presets)
         self.map_presets = QComboBox(); self.map_presets.setObjectName('map_presets'); self.map_presets.addItem(MAP_PRESET_PROMPT)
@@ -276,7 +342,7 @@ class TransformPanel(QWidget):
                 self.noise_spectrum.edited.connect(lambda curve: self.options_edited(NoiseOptions('Custom', self.stack[self.current].noise.rate, curve)))
             fields = []
             for field in FIELDS[kind]:
-                widget = ParamField(slider_class, field, caption_width=120 if kind == NOISE else 104); widget.setObjectName(f'transform_{field.name}')
+                widget = ParamField(slider_class, field, caption_width=106 if kind == NOISE else 92); widget.setObjectName(f'transform_{field.name}')
                 widget.changed.connect(lambda param, name=field.name: self.param_edited(name, param))
                 widget.automate.connect(lambda on, name=field.name: self.automate.emit(self.current, name, on))
                 rows.addWidget(widget); fields.append(widget)
@@ -375,7 +441,11 @@ class TransformPanel(QWidget):
         if [self.list.item(i).text() for i in range(self.list.count())] != labels:
             self.list.clear()
             for label in labels:
-                item = QListWidgetItem(label); self.list.addItem(item)
+                item = QListWidgetItem(label)
+                item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
+                self.list.addItem(item)
+        rows = min(max(len(self.stack), 3), 7)
+        self.list.setFixedHeight(rows * 26 + 6)
         for i, transform in enumerate(self.stack):
             item = self.list.item(i)
             row = self.list.itemWidget(item)
@@ -415,6 +485,14 @@ class TransformPanel(QWidget):
         for kind, (box, _) in self.editors.items(): box.setToolTip(help_text(kind))
         for i, transform in enumerate(self.stack): self.list.item(i).setToolTip(HELP[transform.kind])
         self.help.setText(tip); self.help.hide()
+        needs_sub = (
+            self._target_solid in LOW_POLY_SOLIDS
+            and selected is not None
+            and selected.kind in DEFORM_NEEDS_SUBDIVIDE
+            and len(self.stack) < MAX_TRANSFORMS
+            and not any(t.enabled and t.kind == SUBDIVIDE for t in self.stack[:self.current])
+        )
+        self.subdivide_bar.setVisible(needs_sub)
         self.empty.setVisible(not self.stack)
         for key in ('duplicate', 'remove'): self.buttons[key].setEnabled(selected is not None)
         self.buttons['up'].setEnabled(self.current > 0); self.buttons['down'].setEnabled(0 <= self.current < len(self.stack)-1)
@@ -515,10 +593,7 @@ class TransformPanel(QWidget):
         if not self.stack: return False
         return self._store(STACK, self.stack, '', name)
 
-    def insert_saved(self, name, mode=APPEND):
-        """Insert a copy of the saved transform name (a step below the selection; a stack
-        appended, or replacing the stack) and its variables, renaming clashing variables."""
-        preset = self.saved.get(name)
+    def _insert_preset(self, name, preset, mode=APPEND):
         if preset is None: return False
         notices = []
         try:
@@ -535,6 +610,15 @@ class TransformPanel(QWidget):
         self.error.setText(' '.join(notices))
         self.preset_inserted.emit(dict(transforms=stack, transform_variables=variables), label)
         return self.stack == stack and self.variables == variables  # False if the scene refused it (and resynced).
+
+    def insert_recipe(self, name, mode=APPEND):
+        """Insert a built-in starter transform stack recipe (appended or replacing the stack)."""
+        return self._insert_preset(name, BUILTIN_RECIPES.get(name), mode=mode)
+
+    def insert_saved(self, name, mode=APPEND):
+        """Insert a copy of the saved transform name (a step below the selection; a stack
+        appended, or replacing the stack) and its variables, renaming clashing variables."""
+        return self._insert_preset(name, self.saved.get(name), mode=mode)
 
     def rename_saved(self, old=None, new=None):
         if self.presets_path is None or not self.saved: return False
@@ -577,11 +661,13 @@ class TransformPanel(QWidget):
         for row in self.variable_rows: row['value'].automation_allowed = allowed
 
     # Object variables (T5) -----------------------------------------------------
-    def set_variables(self, variables, taken=None, path=None):
+    def set_variables(self, variables, taken=None, path=None, matrix=None):
         """Show the object's variables; taken: {name: what uses it} (its equation variables,
-        refused as names); path: (path_start, path_trace), which a rename also rewrites."""
+        refused as names); path: (path_start, path_trace), which a rename also rewrites;
+        matrix: a Matrix object's MatrixConfig, whose speed expressions a rename also rewrites."""
         variables = tuple(variables)
         self.taken = dict(taken or {})
+        self.matrix = matrix
         if path is not None: self.path = tuple(path)
         structure = lambda values: [(v.name, v.low, v.high) for v in values]
         rebuild = structure(variables) != structure(self.variables) or len(self.variable_rows) != len(variables)
@@ -631,17 +717,19 @@ class TransformPanel(QWidget):
         try:
             validate_object_variables(tuple(variables), self.taken)
             shape = Shape(transforms=self.stack, path_start=self.path[0], path_trace=self.path[1],
-                          transform_variables=self.variables)
+                          transform_variables=self.variables, matrix=self.matrix)
             shape = renamed_variable(shape, *rename) if rename else shape
             shape = replace(shape, transform_variables=tuple(variables))
             validate_stack(shape.transforms, shape.transform_variables)
             validate_path(shape.path_start, shape.path_trace, shape.transform_variables)
+            if shape.matrix is not None: validate_matrix(shape.matrix, variable_names(shape.transform_variables))
         except ValueError as error:
             self.variable_error.setText(str(error)); return False
         fields = dict(transform_variables=shape.transform_variables)
         if rename:
             fields.update(transforms=shape.transforms, path_start=shape.path_start, path_trace=shape.path_trace)
-            self.stack = shape.transforms; self.path = (shape.path_start, shape.path_trace)
+            if shape.matrix is not None and shape.matrix != self.matrix: fields['matrix'] = shape.matrix
+            self.stack = shape.transforms; self.path = (shape.path_start, shape.path_trace); self.matrix = shape.matrix
         self.variable_error.setText('')
         rebuild = variable_names(variables) != variable_names(self.variables) or len(variables) != len(self.variables)
         self.variables = tuple(variables)
@@ -719,9 +807,29 @@ class TransformPanel(QWidget):
             from dataclasses import replace
             stack = list(self.stack); stack[row] = replace(stack[row], enabled=on); self.propose(stack, row)
 
+    def set_target_solid(self, solid):
+        solid = solid or ''
+        if solid != self._target_solid:
+            self._target_solid = solid
+            self.refresh()
+
+    def insert_subdivide_above(self):
+        if not 0 <= self.current < len(self.stack) or len(self.stack) >= MAX_TRANSFORMS:
+            return False
+        stack = list(self.stack)
+        stack.insert(self.current, Transform(SUBDIVIDE, (Param(4.),)))
+        return self.propose(stack, self.current + 1)
+
     def add(self, kind):
         index = self.current + 1 if self.stack else 0
         stack = list(self.stack); stack.insert(index, new_transform(kind)); self.propose(stack, index)
+
+    def _rows_moved(self, start, row):
+        if not 0 <= start < len(self.stack): return
+        to = min(row if row < start else row - 1, len(self.stack) - 1)
+        if to == start: return
+        stack = list(self.stack); moved = stack.pop(start); stack.insert(to, moved)
+        QTimer.singleShot(0, lambda stack=stack, to=to: self.propose(stack, to))
 
     def action(self, key):
         i, stack = self.current, list(self.stack)

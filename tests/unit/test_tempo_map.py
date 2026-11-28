@@ -23,6 +23,12 @@ from phosphor.storage.project_files import project_document, project_from_docume
 
 
 class TempoMapTests(unittest.TestCase):
+    def test_scene_bar_range_respects_meter_and_exclusive_clip_end(self):
+        meter = Meter(((0, 3, 4), (3, 5, 4)))
+        self.assertEqual(meter.bar_range(3, 9), (2, 3))
+        self.assertEqual(meter.bar_range(8.5, 14), (3, 4))
+        self.assertEqual(meter.bar_range(9, 14.25), (4, 5))
+
     def test_meter_metronome_accents_and_constant_regression(self):
         rate = 48000
         seconds = np.arange(rate * 4) / rate

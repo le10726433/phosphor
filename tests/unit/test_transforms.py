@@ -9,8 +9,8 @@ import numpy as np
 from phosphor.engine.function_plot import FunctionPlot, PARAMETRIC_OBJECT
 from phosphor.engine.signal_engine import Settings, Shape, render, validate, planned_path, projected_solid, posed_object
 from phosphor.engine.transforms import (KINDS, ROTATE, SPIN, TRANSLATE, SCALE, SHEAR, MIRROR, MOTION_PATH, PERSPECTIVE, NOISE,
-                                        Param, Transform, NoiseOptions, new_transform, apply_stack, migrated_pose, route_positions,
-                                        validate_stack, resting_tilt_step)
+                                        SCENE_25_TRANSFORMS, Param, Transform, NoiseOptions, new_transform, apply_stack, migrated_pose, route_positions,
+                                        validate_stack, resting_tilt_step, stack_varies_with_time, GLITCH, WAVE)
 from phosphor.storage.app_files import scene_document, read_scene, atomic_json
 from phosphor.storage.app_files import SCENE_VERSION
 
@@ -20,13 +20,23 @@ def static(kind, *values): return Transform(kind, tuple(Param(float(v)) for v in
 
 
 class StackTests(unittest.TestCase):
+    def test_outline_clock_for_constant_transforms(self):
+        spin = static(SPIN, 0, 0, .5)
+        self.assertTrue(stack_varies_with_time((spin,)))
+        self.assertFalse(stack_varies_with_time((static(ROTATE, 0, 0, 45),)))
+        self.assertFalse(stack_varies_with_time((replace(spin, enabled=False),)))
+        for kind, field in ((WAVE, 'speed'), (NOISE, 'speed'), (GLITCH, 'rate')):
+            step = new_transform(kind)
+            self.assertTrue(stack_varies_with_time((step,)))
+            self.assertFalse(stack_varies_with_time((step.with_param(field, Param(0)),)))
+
     points = np.array([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.], [.3, -.2, .5]])
 
     def test_every_kind_has_neutral_defaults_except_motion_perspective_and_noise(self):
         for kind in KINDS:
             with self.subTest(kind=kind):
                 posed, noise = apply_stack(self.points, (new_transform(kind),), 0.)
-                if kind in (MOTION_PATH, PERSPECTIVE): continue
+                if kind in (MOTION_PATH, PERSPECTIVE) or kind in SCENE_25_TRANSFORMS: continue
                 np.testing.assert_allclose(posed, self.points, atol=1e-12)
                 self.assertEqual(noise is not None, kind == NOISE)
 

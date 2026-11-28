@@ -38,8 +38,9 @@ It covers setup, Sandbox, Composer, transforms, signal output, export and worked
 
 ### Shapes
 
-- **Built-in objects:** the five Platonic solids, a 2D triangle, square and pentagon,
-  a tilting circle and an octant sphere.
+- **Built-in objects:** the five Platonic solids, a torus, knots, a Möbius strip, a
+  tesseract, a geodesic sphere, prisms and pyramids; 2D polygons, a configurable Star and
+  Gear, and curves; an animated Radar sweep and Clock; and Matrix rain.
 - **Vector text:** up to 64 characters, traced through the same geometry engine.
   Lowercase is drawn as capitals.
 - **Equations:** parametric x, y (and z) expressions, and recurrence equations, with
@@ -51,10 +52,13 @@ It covers setup, Sandbox, Composer, transforms, signal output, export and worked
   snap-and-join, node editing, Undo/Redo, box selection and clipboard tools. Drawings
   save as reusable `.shape.json` files. Inside the builder, a path can guide follower
   shapes (motion paths).
-- **Transforms:** each object has an ordered stack of Rotate, Spin, Translate, Scale,
-  Shear, Mirror, Motion path, Perspective, Map and Noise steps. Fields take numbers,
-  expressions or automation, objects carry up to eight variables of their own, and
-  stacks can be saved and reused.
+- **Transforms:** each object has an ordered stack of steps: Rotate, Spin, Translate,
+  Scale, Shear, Mirror, Motion path, Perspective, Map and Noise, and copy and effect steps
+  such as Gridify, Radial array, Kaleidoscope, Echo, Pointify, Subdivide, Glitch, Wave and
+  Attractor. Fields take numbers, expressions or automation, objects carry up to eight
+  variables of their own, and stacks can be saved and reused.
+- **Quick Add** (⌘K on the Mac, Ctrl+K on Windows) searches the whole catalog of objects,
+  equations, transforms and recipes and adds the one you pick.
 - **Scenes:** each object has its own position, size and path window (where its trace
   starts and how much of it the beam draws). Objects can be muted or soloed, and
   **Replace** changes an object's type while keeping its place, transforms and
@@ -109,6 +113,10 @@ It covers setup, Sandbox, Composer, transforms, signal output, export and worked
   beam lingers and fades it over time, with a Gaussian or hard-edged beam and bloom glow
   that stays continuous around sharp corners. See
   [how it works](#how-the-phosphor-screen-is-simulated).
+- **Graphics quality:** **Appearance › Quality** chooses Low, Medium, High (the default) or
+  Ultra. Higher tiers add soft saturation, a long afterglow tail, a faceplate halo and a
+  glass vignette; see [graphics quality](#graphics-quality). Grids can be drawn as lines
+  or as a graticule.
 - **Phosphor profiles:** P31 green (the default), Palette colour, P1 and P7, plus a
   saved Custom profile edited as an intensity-against-time plot.
 - **Line trace:** turn the phosphor display off for a crisp vector trace with optional
@@ -116,7 +124,8 @@ It covers setup, Sandbox, Composer, transforms, signal output, export and worked
 - **Colour presets:** OLED white, Green monochrome, Amber, Cyan and macOS Graphite.
 - **Styles:** **Classic** draws the controls in the scope's palette. **Modern** uses
   rounded controls, the system font and blue accents, in Dark, Light or following the
-  system.
+  system. **Vintage** is a warm beige hardware panel with photorealistic knobs and
+  switches.
 - **Display rate:** frames follow the monitor's refresh rate (or a steady 60 Hz), with
   phosphor brightness and decay normalized to look the same at any rate.
 - **System-audio visualization:** Core Audio taps on macOS and WASAPI loopback on
@@ -126,6 +135,10 @@ It covers setup, Sandbox, Composer, transforms, signal output, export and worked
 - **Video input:** a video file shown as a monochrome phosphor raster.
 - **Views:** full screen, a trace-only view (Escape restores the controls) and a
   pop-out monitor for a second screen.
+- **3D Lab Bench** (**View › 3D Lab Bench**, ⌃⌘3 or Ctrl+Shift+3) shows the scope as a
+  late-1980s bench oscilloscope in a lit 3D lab, with working knobs, coax cables and
+  reflections. An optional live GPU path tracer renders the bench when its packages are
+  installed (see [Run from source](#run-from-source)); T toggles it.
 - **Layout:** resizable side panels and timeline; keyboard shortcuts you can change in
   **Preferences › Controls**.
 
@@ -190,6 +203,11 @@ py -3.12 -m venv .venv
 
 Later, launch with `./LaunchMac.command` or `LaunchQt.bat`. See the
 [macOS development guide](docs/MACOS_DEVELOPMENT.md) for permissions and diagnostics.
+
+The 3D Lab Bench's live path tracer is optional and not part of the downloadable apps. To
+use it from source, install its packages on top of the ones above:
+`python -m pip install -r requirements/requirements-raytrace.txt`. Without them the bench
+uses its Qt Quick 3D rendering.
 
 ## Build the apps
 
@@ -543,7 +561,9 @@ keep = exp(−elapsed / time_constant)
 
 Accumulated light therefore restarts when the window is resized. Using the measured
 `elapsed` keeps decay correct at any frame rate, so a 144 Hz display fades like a 60 Hz
-one. The small `step` removes faint residue so tails reach true black. Energy can build
+one. The small `step`, also scaled by `elapsed`, removes faint residue so tails reach
+true black. On High and Ultra a power-law tail stretches the slow channel's afterglow; it
+too is scaled by each frame's length. Energy can build
 up to 64, far above a single frame's deposit, which is what allows real over-bright
 regions.
 
@@ -556,6 +576,10 @@ Two implementation details matter:
 - **The buffer advances once per display frame.** Its layers are `live: false` and are
   scheduled explicitly, so decay is applied exactly once per frame with that frame's
   measured time.
+- **Rounding is dithered.** At high refresh rates a dim pixel loses less than half a
+  storage step per frame, so plain rounding would keep it lit forever. Each frame adds a
+  tiny per-pixel offset before the energy is stored, so on average it decays exactly as
+  the unrounded model does and dim traces fade to black at every rate.
 
 ### 5. Energy becomes light
 
@@ -580,6 +604,21 @@ size*), and added back. Because it spreads the energy rather than drawing extra 
 it stays continuous around corners and fades with the phosphor, and its cost barely
 depends on glow size. *Glow intensity* sets its peak beside the trace (6% of the trace's
 energy at 1×).
+
+### Graphics quality
+
+**Appearance › Quality** sets how much of the simulation runs. It only changes the
+preview, never audio or exports.
+
+| Tier | Adds |
+| --- | --- |
+| Low | The basic model above. Glow, the graticule grid style and the Gaussian beam are off |
+| Medium | Soft saturation of over-bright regions |
+| High (default) | The power-law afterglow tail, P7's flash-to-afterglow cascade, tone mixing in linear light, a faceplate halo around the trace and the glass vignette |
+| Ultra | A stronger, finer halo, and the trace darkened under graticule lines |
+
+Settings a tier doesn't use are greyed out, with a tooltip naming the tier that does, and
+their values are kept.
 
 ### Phosphor presets
 
@@ -606,7 +645,7 @@ The shape builder's output preview always uses the line trace.
 
 - Each frame's deposit is capped at full level, so added corner dwell stops brightening
   a spot after a few held samples at typical trace widths.
-- Glass scatter isn't modelled.
+- Glass scatter is only approximated, by the High and Ultra halo.
 - DAC reconstruction, analog bandwidth, AC coupling and channel mismatch aren't
   modelled. *Display interpolation* can smooth between samples, but it adds display
   points only.
@@ -680,8 +719,9 @@ measure render, display and playback pacing (including stress cases with 20,000 
 a fully automated 24-object scene and eight audio tracks with effects), and
 `tools/style_snapshots.py` compares the controls' look between versions.
 
-At 0.92.1 on Windows, 1,196 unit tests and all 114 smoke runs (57 smokes at scales 1
-and 1.5) passed natively, and golden audio was unchanged. CI runs `check_core` and builds
+At 0.93.2 on Windows, 1,287 unit tests and all 122 smoke runs (61 smokes at scales 1
+and 1.5) passed natively, golden audio was unchanged, and a packaged build opened the 3D
+Lab Bench. CI runs `check_core` and builds
 both apps on every push.
 
 Still untested or uncalibrated: anything by ear, controller-to-speaker MIDI latency as
@@ -705,7 +745,8 @@ version. It comes with no warranty.
 The packaged apps include third-party software under its own licenses; see
 [NOTICE.md](NOTICE.md). Qt and PySide6 are used under the LGPL v3 and ship as
 separate, replaceable libraries. The JetBrains Mono font is under the
-[SIL Open Font License](phosphor/assets/fonts/OFL.txt).
+[SIL Open Font License](phosphor/assets/fonts/OFL.txt). The 3D Lab Bench's textures and
+lighting come from [Poly Haven](https://polyhaven.com) under CC0.
 
 phosphor bundles no music. MIDI and audio files you open are read from your own disk;
 scenes and projects store only their paths.

@@ -330,8 +330,8 @@ class FileTests(unittest.TestCase):
 
     def test_version_gate_and_invalid_documents(self):
         document = json.loads(json.dumps(scene_document(Settings(shapes=(self.shape(),)), 'drawing', '')))
-        with self.assertRaisesRegex(ValueError, f'scene version {SCENE_VERSION}'):
-            scene_from_document(dict(document, version=SCENE_VERSION - 1))
+        with self.assertRaisesRegex(ValueError, 'scene version 24'):
+            scene_from_document(dict(document, version=23))
         item = document['shapes'][0]
         for bad in ([], 'a', [dict(name='a')], [dict(name='a', value=1., low=0., high=2., colour=1)],
                     [dict(name='x', value=1., low=0., high=2.)]):

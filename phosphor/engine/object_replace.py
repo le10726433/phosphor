@@ -32,18 +32,21 @@ from phosphor.engine.function_plot import PARAMETRIC_OBJECT, FunctionPlot
 from phosphor.engine.model_object import MODEL_OBJECT
 from phosphor.engine.recurrence import RECURRENCE_OBJECT, RecurrencePlot
 from phosphor.engine.vector_text import TEXT_OBJECT, DEFAULT_TEXT
+from phosphor.engine.matrix_rain import MATRIX_OBJECT, MatrixConfig
+from phosphor.engine.solids import PARAMETRIC_SOLIDS
 
 ADD_TEXT = 'HELLO'  # Text of a new Text object (Add object › Text).
 EQUATIONS = {PARAMETRIC_OBJECT: 'plot', RECURRENCE_OBJECT: 'recurrence'}
-TYPE_FIELDS = ('text', 'custom', 'model', 'plot', 'recurrence')
+TYPE_FIELDS = ('text', 'custom', 'model', 'plot', 'recurrence', 'matrix', 'shape_params')
 FIELD_TYPES = {'text': TEXT_OBJECT, 'custom': CUSTOM_OBJECT, 'model': MODEL_OBJECT,
-               'plot': PARAMETRIC_OBJECT, 'recurrence': RECURRENCE_OBJECT}
+               'plot': PARAMETRIC_OBJECT, 'recurrence': RECURRENCE_OBJECT, 'matrix': MATRIX_OBJECT}
 
 
 def new_shape(solid):
     """A new object of a built-in kind, as Add object makes it (not Custom shape or 3D model)."""
     from phosphor.engine.signal_engine import Shape
     if solid == TEXT_OBJECT: return Shape(solid=TEXT_OBJECT, text=ADD_TEXT)
+    if solid == MATRIX_OBJECT: return Shape(solid=MATRIX_OBJECT, matrix=MatrixConfig())
     if solid == PARAMETRIC_OBJECT: return Shape(solid=PARAMETRIC_OBJECT, plot=FunctionPlot())
     if solid == RECURRENCE_OBJECT: return Shape(solid=RECURRENCE_OBJECT, recurrence=RecurrencePlot())
     return Shape(solid=solid)
@@ -51,7 +54,8 @@ def new_shape(solid):
 
 def type_field(solid):
     """The Shape field that holds solid's own data, or None for the built-in solids."""
-    return {TEXT_OBJECT: 'text', CUSTOM_OBJECT: 'custom', MODEL_OBJECT: 'model', **EQUATIONS}.get(solid)
+    if solid in PARAMETRIC_SOLIDS: return 'shape_params'
+    return {TEXT_OBJECT: 'text', CUSTOM_OBJECT: 'custom', MODEL_OBJECT: 'model', MATRIX_OBJECT: 'matrix', **EQUATIONS}.get(solid)
 
 
 def parked_fields(shape):
@@ -176,6 +180,7 @@ def replaced(shape, solid, custom=None, model=None, notices=None):
     if incoming is not None: values[EQUATIONS[solid]] = incoming
     else:
         if solid == TEXT_OBJECT and shape.text == DEFAULT_TEXT: values['text'] = ADD_TEXT
+        elif solid == MATRIX_OBJECT and shape.matrix is None: values['matrix'] = MatrixConfig()
         elif solid == CUSTOM_OBJECT and shape.custom is None:
             if custom is None: raise ValueError('Draw the custom shape first.')
             values['custom'] = custom

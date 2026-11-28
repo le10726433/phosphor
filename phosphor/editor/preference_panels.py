@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCombo
 from phosphor.display import theme as themes
 from phosphor.display.crt_theme import PALETTES
 from phosphor.display.glow_trail import VISUAL_DEFAULTS, VISUAL_RANGES
-from phosphor.display.phosphor import BEAM_PROFILES, PHOSPHOR_CUSTOM, PHOSPHOR_NAMES, PHOSPHOR_OFF, phosphor_profile
+from phosphor.display.phosphor import (BEAM_PROFILES, DEFAULT_GRAPHICS_QUALITY, DEFAULT_GRID_STYLE,
+    GRAPHICS_QUALITIES, GRID_STYLES, PHOSPHOR_CUSTOM, PHOSPHOR_NAMES, PHOSPHOR_OFF,
+    QUALITY_HIGH, QUALITY_LOW, QUALITY_ULTRA, phosphor_profile)
 from phosphor.display.trace_interpolation import INTERPOLATION_FACTORS
 from phosphor.editor.phosphor_editor import PhosphorEditor
 from phosphor.engine.corner_dwell import MAX_DWELL_US
@@ -28,7 +30,10 @@ BEAM_SLIDERS = (('trace_thickness', 'Trace thickness (px)'), ('glow_size', 'Glow
                 ('glow_intensity', 'Glow intensity (×)'), ('glow_decay', 'Glow decay time (seconds, line trace only)'),
                 ('beam_brightness', 'Beam-speed brightness (0 = Classic even trace)'))
 PHOSPHOR_SLIDERS = (('beam_intensity', 'Phosphor intensity (×)'), ('phosphor_grain', 'Phosphor grain (0 = smooth)'),
-                    ('phosphor_shimmer', 'Beam shimmer (0 = steady)'))
+                    ('phosphor_shimmer', 'Beam shimmer (0 = steady)'), ('glass_vignette', 'Glass vignette (0 = flat)'))
+GLOW_TIP = 'Glow applies on Medium, High and Ultra.'
+GRID_STYLE_TIP = 'Grid style applies on Medium, High and Ultra; Low draws the Simple grid.'
+BEAM_PROFILE_TIP = 'Gaussian applies on Medium, High and Ultra; Low draws a hard edge.'
 
 
 def _wrapping(label):
@@ -87,24 +92,39 @@ class AppearanceEditor(QWidget):
         self.style_choice = QComboBox(); self.style_choice.addItems(list(themes.STYLES)); self.style_choice.setObjectName('style')
         self.style_choice.setToolTip('The look of the controls. The scope keeps its own display settings in every style.')
         self.grid = QCheckBox('Grid lines'); self.grid.setObjectName('show_grid')
+        self.grid_style = QComboBox(); self.grid_style.addItems(list(GRID_STYLES)); self.grid_style.setObjectName('grid_style')
+        self.grid_style.setToolTip('Graticule adds Tektronix-style centre crosshairs, subdivision ticks and frame border; Simple draws a uniform grid. '+GRID_STYLE_TIP)
+        grid_row = QWidget(); grid_row_layout = QHBoxLayout(grid_row); grid_row_layout.setContentsMargins(0, 0, 0, 0)
+        grid_row_layout.addWidget(self.grid); grid_row_layout.addWidget(self.grid_style, 1)
         self.density = QSpinBox(); self.density.setRange(2, 64); self.density.setObjectName('grid_divisions')
         self.density_label = QLabel('Grid divisions per axis')
         self.scan = QCheckBox('CRT scanlines'); self.scan.setObjectName('crt_scanlines')
         self.glow = QCheckBox('GPU trace glow'); self.glow.setObjectName('crt_glow')
+        self.glow.setToolTip(GLOW_TIP)
         self.interpolation = QComboBox(); self.interpolation.addItems(list(INTERPOLATION_FACTORS)); self.interpolation.setObjectName('trace_interpolation')
         self.display_rate = QComboBox(); self.display_rate.addItems(['Match monitor', '60 Hz']); self.display_rate.setObjectName('display_rate')
+        self.graphics_quality = QComboBox(); self.graphics_quality.addItems(list(GRAPHICS_QUALITIES)); self.graphics_quality.setObjectName('graphics_quality')
+        self.graphics_quality.setToolTip('Independent GPU fidelity tier (Low skips blur/bloom; Medium adds soft saturation; '
+                                         'High adds Becquerel decay, P7 cascade, linear tone map and glass scatter; '
+                                         'Ultra adds dual-scale wide glass halation and edge-lit graticule).')
         self.beam_profile = QComboBox(); self.beam_profile.addItems(BEAM_PROFILES); self.beam_profile.setObjectName('beam_profile')
-        for text, widget in (('Color preset', self.palette), ('', self.grid), (self.density_label, self.density), ('', self.scan),
+        self.beam_profile.setToolTip(BEAM_PROFILE_TIP)
+        for text, widget in (('Color preset', self.palette), ('', grid_row), (self.density_label, self.density), ('', self.scan),
                              ('', self.glow), ('Display interpolation', self.interpolation)):
             if text: column.addWidget(text if isinstance(text, QLabel) else QLabel(text))
             column.addWidget(widget)
         column.addWidget(QLabel('Interpolation smooths between samples and adds no audio detail; cubic curves can '
                                 'overshoot. Appearance affects the preview only, never the audio.'))
         column.addStretch(1)
-        # One compact form row keeps Display within the 1000x700 panel budget.
+        # Compact inline rows keep Display within the 1000x700 panel budget.
         rate_label = QLabel('Display rate'); rate_label.setProperty('inlineCaption', True)  # The sidebar wraps other labels to width 0.
         self.display_rate.setToolTip('Match monitor draws at the refresh rate of the screen showing the scope. '
                                      'The phosphor looks the same at any rate.')
+        quality_label = QLabel('Quality'); quality_label.setProperty('inlineCaption', True)
+        quality_label.setToolTip(self.graphics_quality.toolTip())
+        quality_label.setMinimumWidth(rate_label.sizeHint().width())
+        quality_row = QHBoxLayout(); quality_row.addWidget(quality_label); quality_row.addWidget(self.graphics_quality, 1)
+        column.insertLayout(0, quality_row)
         rate_row = QHBoxLayout(); rate_row.addWidget(rate_label); rate_row.addWidget(self.display_rate, 1)
         column.insertLayout(0, rate_row)
         self.mode_row = QWidget()
@@ -120,7 +140,8 @@ class AppearanceEditor(QWidget):
         style_label.setMinimumWidth(rate_label.sizeHint().width())  # Both boxes start at one x.
         style_row = QHBoxLayout(); style_row.addWidget(style_label); style_row.addWidget(self.style_choice, 1)
         column.insertLayout(0, style_row)
-        beam.addWidget(QLabel('Beam profile')); beam.addWidget(self.beam_profile)
+        self.beam_profile_label = QLabel('Beam profile'); self.beam_profile_label.setToolTip(BEAM_PROFILE_TIP)
+        beam.addWidget(self.beam_profile_label); beam.addWidget(self.beam_profile)
         self.sliders, self.slider_labels = {}, {}
         for key, label in BEAM_SLIDERS: self.add_slider(slider_class, beam, key, label)
         beam.addWidget(QLabel('Decay 0 = no afterimage. Double-click a slider to reset it.'))
@@ -139,12 +160,13 @@ class AppearanceEditor(QWidget):
         self.load(values)
         self.editor.edited.connect(self.profile_edited)
         self.grid.toggled.connect(self.grid_toggled)
-        for signal in (self.phosphor.currentTextChanged, self.palette.currentTextChanged, self.sliders['beam_intensity'].edited):
+        for signal in (self.phosphor.currentTextChanged, self.palette.currentTextChanged,
+                       self.graphics_quality.currentTextChanged, self.sliders['beam_intensity'].edited):
             signal.connect(lambda *args: self.refresh_editor())
         self.style_choice.currentTextChanged.connect(self.show_mode)
-        for signal in (self.style_choice.currentTextChanged, self.mode_choice.currentTextChanged, self.palette.currentTextChanged, self.grid.toggled, self.density.valueChanged, self.scan.toggled,
+        for signal in (self.style_choice.currentTextChanged, self.mode_choice.currentTextChanged, self.palette.currentTextChanged, self.grid.toggled, self.grid_style.currentTextChanged, self.density.valueChanged, self.scan.toggled,
                        self.glow.toggled, self.interpolation.currentTextChanged, self.phosphor.currentTextChanged,
-                       self.beam_profile.currentTextChanged, self.display_rate.currentTextChanged, *[slider.edited for slider in self.sliders.values()]):
+                       self.beam_profile.currentTextChanged, self.display_rate.currentTextChanged, self.graphics_quality.currentTextChanged, *[slider.edited for slider in self.sliders.values()]):
             signal.connect(lambda *args: self.changed.emit(self.values()))
 
     def add_slider(self, slider_class, layout, key, label):
@@ -152,29 +174,39 @@ class AppearanceEditor(QWidget):
         slider = slider_class(VISUAL_DEFAULTS[key], *VISUAL_RANGES[key], curve=key == 'beam_intensity')
         # 28 px like the side panels' other sliders; macOS otherwise pads the row to 35.
         slider.setObjectName(key); slider.setFixedHeight(28); self.sliders[key] = slider; layout.addWidget(slider)
+        tips = []
         if key in ('trace_thickness', 'glow_size'):
-            tip = 'Sizes scale with the scope: these are pixels when its short side is 720.'
-            self.slider_labels[key].setToolTip(tip); slider.setToolTip(tip)
+            tips.append('Sizes are in pixels when the short side of the scope is 720.')
+        if key.startswith('glow_'):
+            tips.append(GLOW_TIP)
+        if key == 'glass_vignette':
+            tips.append('Glass vignette applies on High and Ultra with phosphor enabled.')
+        if tips:
+            self.slider_labels[key].setToolTip(' '.join(tips))
+            slider.setToolTip(' '.join(tips))
 
     def values(self):
         return dict(style=self.style_choice.currentText(), style_mode=self.mode_choice.currentText(),
-                    palette=self.palette.currentText(), show_grid=self.grid.isChecked(), grid_divisions=self.density.value(),
+                    palette=self.palette.currentText(), show_grid=self.grid.isChecked(), grid_style=self.grid_style.currentText(), grid_divisions=self.density.value(),
                     crt_scanlines=self.scan.isChecked(), crt_glow=self.glow.isChecked(),
                     trace_interpolation=self.interpolation.currentText(), phosphor=self.phosphor.currentText(),
-                    beam_profile=self.beam_profile.currentText(), phosphor_custom=dict(self.custom), display_rate=self.display_rate.currentText(),
+                    beam_profile=self.beam_profile.currentText(), graphics_quality=self.graphics_quality.currentText(),
+                    phosphor_custom=dict(self.custom), display_rate=self.display_rate.currentText(),
                     **self.export_preferences, **self.wheel_preferences, **{key: slider.value for key, slider in self.sliders.items()})
 
     def load(self, values):
         """Show values without emitting changed."""
         self.export_preferences = {key: values[key] for key in ('export_format', 'export_depth', 'export_rate', 'export_range', 'ffmpeg_path', 'metronome_level')}
         self.wheel_preferences = wheel_mapping.validated_mapping(values)
-        widgets = (self.style_choice, self.mode_choice, self.palette, self.grid, self.density, self.scan, self.glow, self.interpolation, self.phosphor, self.beam_profile, self.display_rate)
+        widgets = (self.style_choice, self.mode_choice, self.palette, self.grid, self.grid_style, self.density, self.scan, self.glow, self.interpolation, self.phosphor, self.beam_profile, self.display_rate, self.graphics_quality)
         blockers = [QSignalBlocker(widget) for widget in widgets]
         self.style_choice.setCurrentText(values.get('style', themes.DEFAULT_STYLE))
         self.mode_choice.setCurrentText(values.get('style_mode', themes.DEFAULT_MODE))
         self.show_mode(self.style_choice.currentText())
         self.palette.setCurrentText(values['palette']); self.grid.setChecked(values['show_grid'])
+        self.grid_style.setCurrentText(values.get('grid_style', DEFAULT_GRID_STYLE))
         self.display_rate.setCurrentText(values['display_rate'])
+        self.graphics_quality.setCurrentText(values.get('graphics_quality', DEFAULT_GRAPHICS_QUALITY))
         self.density.setValue(values['grid_divisions']); self.scan.setChecked(values['crt_scanlines'])
         self.glow.setChecked(values['crt_glow']); self.interpolation.setCurrentText(values['trace_interpolation'])
         self.phosphor.setCurrentText(values['phosphor']); self.beam_profile.setCurrentText(values['beam_profile'])
@@ -188,6 +220,8 @@ class AppearanceEditor(QWidget):
         self.mode_row.setVisible(style == themes.MODERN)
 
     def grid_toggled(self, enabled):
+        # Low draws the Simple grid whatever the style; the stored choice is kept.
+        self.grid_style.setEnabled(enabled and self.graphics_quality.currentText() != QUALITY_LOW)
         self.density.setEnabled(enabled); self.density_label.setEnabled(enabled)
 
     def set_theme(self, theme):
@@ -198,11 +232,21 @@ class AppearanceEditor(QWidget):
         name = self.phosphor.currentText()
         palette = PALETTES[self.palette.currentText()]
         profile = phosphor_profile(name, palette['trace'], self.custom)
-        self.editor.set_profile(profile or self.custom, self.sliders['beam_intensity'].value, profile is not None)
+        quality = self.graphics_quality.currentText()
+        self.editor.set_profile(profile or self.custom, self.sliders['beam_intensity'].value,
+                                profile is not None, quality, name)
         # Phosphor decay replaces the line trace's glow afterimage.
         line = name == PHOSPHOR_OFF
-        for key in ('glow_decay',): self.sliders[key].setEnabled(line); self.slider_labels[key].setEnabled(line)
-        for key in ('phosphor_grain', 'phosphor_shimmer'): self.sliders[key].setEnabled(not line); self.slider_labels[key].setEnabled(not line)
+        glow = quality != QUALITY_LOW
+        self.glow.setEnabled(glow)
+        # Low ignores the grid style and beam profile (Simple, Hard edge); the selections stay.
+        self.grid_toggled(self.grid.isChecked())
+        self.beam_profile.setEnabled(glow); self.beam_profile_label.setEnabled(glow)
+        for key, enabled in (('glow_decay', line and glow), ('glow_size', glow), ('glow_intensity', glow),
+                             ('phosphor_grain', not line), ('phosphor_shimmer', not line),
+                             ('glass_vignette', not line and quality in (QUALITY_HIGH, QUALITY_ULTRA))):
+            for widget in (self.sliders[key], self.slider_labels[key]):
+                widget.setEnabled(enabled)
 
     def profile_edited(self, profile):
         self.custom = dict(profile)

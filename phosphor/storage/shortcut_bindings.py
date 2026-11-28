@@ -21,7 +21,9 @@ MAX_KEYS = 4
 SCOPES = dict(
     new='window', open='window', save='window', save_as='window', undo='window', redo='window',
     fullscreen='window', trace_only='window', escape='window', play='window', home='window',
-    end='window', zoom_song='window',
+    end='window', zoom_song='window', zoom_selection='window', toggle_library='window',
+    panel_input='window', panel_scene='window', panel_mix='window', panel_appearance='window',
+    panel_signal='window', switch_workspace='window', quick_add='window', desk3d='window',
     object_mute='objects', object_solo='objects', object_unmute_all='objects',
     split_clip='timeline', add_marker='timeline', note_duplicate='timeline', note_split='timeline',
     note_join='timeline', note_legato='timeline', note_quantize='timeline')

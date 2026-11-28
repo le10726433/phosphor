@@ -8,7 +8,7 @@ import numpy as np
 
 from phosphor.storage.project_files import PROJECT_VERSION
 from phosphor.engine.composition import (Clip, Note, Project, MAX_CLIPS, empty_settings,
-    split_clip, duplicate_clip, render_song, validate_project)
+    split_clip, duplicate_clip, duplicated_clip_named, render_song, validate_project)
 from phosphor.engine.lane_access import automatable, get_points, set_points
 from phosphor.engine.lane_edit import shift_lane
 from phosphor.engine.signal_engine import Settings, Shape
@@ -83,6 +83,22 @@ class ClipEditTests(unittest.TestCase):
         full = Project(clips=tuple(Clip(i, 1., empty_settings()) for i in range(MAX_CLIPS)))
         with self.assertRaises(ValueError): duplicate_clip(full, 0, 600.)
         with self.assertRaises(ValueError): split_clip(full, 0, .5)
+
+    def test_duplicate_template_keeps_every_clip_setting_and_names_the_copy(self):
+        """'Duplicate selected clip' (clip templates): lanes, length, local time, offset, colour
+        and mute are kept, as Alt+drag keeps them; only the name gains ' copy'."""
+        original = replace(self.clip(local_time=False), name='Verse', muted=True)
+        self.assertTrue(original.lanes)
+        project = Project(clips=(original,))
+        result, index = duplicated_clip_named(project, 0, 16.)
+        self.assertEqual(result.clips[index], replace(original, start=16., name='Verse copy'))
+        self.assertIs(result.clips[0], original)
+        validate_project(result)
+        self.assertEqual(duplicated_clip_named(project, 0, 4.)[0].clips[1].start, original.end)  # Past occupied space.
+        long_name = replace(original, name='n' * 48)
+        self.assertEqual(duplicated_clip_named(Project(clips=(long_name,)), 0, 20.)[0].clips[1].name, 'n' * 48)
+        full = Project(clips=tuple(Clip(i, 1., empty_settings()) for i in range(MAX_CLIPS)))
+        with self.assertRaises(ValueError): duplicated_clip_named(full, 0, 600.)
 
     def test_colour_round_trip_validation_and_clipboard(self):
         for color in (None, *range(8)):

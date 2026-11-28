@@ -9,3 +9,4 @@ transcription_review/
 .native/
 .mac-build/
 .win-build/
+.captures/

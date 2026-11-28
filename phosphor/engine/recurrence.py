@@ -225,17 +225,94 @@ def recurrence_points_at(plot, seconds, positions, tempo=120.):
 
 
 PRESETS = {
+    # 3D Strange Attractors (ODE)
+    'Lorenz attractor': RecurrencePlot('x+0.01*10*(y-x)',
+        'y+0.01*(x*(28-(z*30+25))-y)', 'z+0.01*(x*y*30-(8/3)*(z+25/30))',
+        initial=((.01, .01, -.8),), steps=4096),
+    'Rössler attractor': RecurrencePlot(
+        'x + 0.04*(-y - (z + 0.45))',
+        'y + 0.04*(x + 0.2*y)',
+        'z + 0.04*(0.2/26 + (z + 0.45)*(26*x - c))',
+        initial=((0.06, 0.0, -0.4),), steps=4096,
+        variables=(Variable('c', 5.7, 2.0, 7.0),),
+    ),
+    'Aizawa attractor': RecurrencePlot(
+        'x + 0.01*((z*2.0 - 0.7)*x - 3.5*y)',
+        'y + 0.01*(3.5*x + (z*2.0 - 0.7)*y)',
+        'z + 0.005*(0.6 + 0.95*(z*2.0) - ((z*2.0)**3)/3 - 4*(x*x + y*y)*(1 + 0.25*(z*2.0)) + 0.8*(z*2.0)*(x**3))',
+        initial=((0.05, 0.0, 0.0),), steps=4096,
+    ),
+    'Thomas attractor': RecurrencePlot(
+        'x + 0.08*(sin(4*y)/4 - b*x)',
+        'y + 0.08*(sin(4*z)/4 - b*y)',
+        'z + 0.08*(sin(4*x)/4 - b*z)',
+        initial=((0.25, 0.0, -0.25),), steps=4096,
+        variables=(Variable('b', 0.208, 0.1, 0.35),),
+    ),
+    'Halvorsen attractor': RecurrencePlot(
+        'x + 0.005*(-a*x - 4*y - 4*z - 14*y*y)',
+        'y + 0.005*(-a*y - 4*z - 4*x - 14*z*z)',
+        'z + 0.005*(-a*z - 4*x - 4*y - 14*x*x)',
+        initial=((-0.1, 0.0, 0.0),), steps=4096,
+        variables=(Variable('a', 1.4, 1.25, 1.8),),
+    ),
+    'Dadras attractor': RecurrencePlot(
+        'x + 0.006*(y - 3*x + 2.7*12*y*z)',
+        'y + 0.006*(1.7*y - 12*x*z + z)',
+        'z + 0.006*(2*12*x*y - 9*z)',
+        initial=((0.1, 0.1, 0.0),), steps=4096,
+    ),
+    # 2D Chaotic Maps
     'Hénon map': RecurrencePlot('0.5 - 2.8*x*x + y', '0.3*x', draw='points'),
     'Clifford attractor': RecurrencePlot('(sin(-1.4*y*3)+1.6*cos(-1.4*x*3))/3',
         '(sin(1.6*x*3)+0.7*cos(1.6*y*3))/3', initial=((.1, .1, 0.),), draw='points'),
     'Peter de Jong attractor': RecurrencePlot('(sin(1.4*y*2)-cos(-2.3*x*2))/2',
         '(sin(2.4*x*2)-cos(-2.1*y*2))/2', draw='points'),
-    'Lorenz attractor': RecurrencePlot('x+0.01*10*(y-x)',
-        'y+0.01*(x*(28-(z*30+25))-y)', 'z+0.01*(x*y*30-(8/3)*(z+25/30))',
-        initial=((.01, .01, -.8),), steps=4096),
+    'Gumowski–Mira attractor': RecurrencePlot(
+        'y + 0.008*(1 - 0.05*(22*y)**2)*y + (a*(22*x) + 2*(1-a)*(22*x)**2/(1+(22*x)**2))/22',
+        '-x + (a*(22*y) + 2*(1-a)*(22*y)**2/(1+(22*y)**2))/22',
+        initial=((0.03, 0.03, 0.),), draw='points', steps=2048,
+        variables=(Variable('a', -0.31, -0.9, 0.9),),
+    ),
+    'Svensson attractor': RecurrencePlot(
+        '(d*sin(a*x*4) - sin(b*y*4))/8',
+        '(1.4*cos(a*x*4) + cos(b*y*4))/3',
+        initial=((0.1, 0.1, 0.),), draw='points', steps=2048,
+        variables=(Variable('a', 1.4, -3., 3.), Variable('b', 1.56, -3., 3.), Variable('d', -6.56, -8., 8.)),
+    ),
+    'Ikeda map': RecurrencePlot(
+        '(1 + u*((x*7.0)*cos(0.4 - 6/(1+(x*7.0)**2+(y*7.0)**2)) - (y*7.0)*sin(0.4 - 6/(1+(x*7.0)**2+(y*7.0)**2))))/7.0',
+        '(u*((x*7.0)*sin(0.4 - 6/(1+(x*7.0)**2+(y*7.0)**2)) + (y*7.0)*cos(0.4 - 6/(1+(x*7.0)**2+(y*7.0)**2))))/7.0',
+        initial=((0.02, 0.02, 0.),), draw='points', steps=2048,
+        variables=(Variable('u', 0.918, 0.5, 0.95),),
+    ),
+    'Tinkerbell map': RecurrencePlot(
+        '((x*1.8)**2 - (y*1.8)**2 + 0.9*(x*1.8) - 0.6013*(y*1.8))/1.8',
+        '(2*(x*1.8)*(y*1.8) + 2.0*(x*1.8) + 0.5*(y*1.8))/1.8',
+        initial=((-0.4, -0.33, 0.),), draw='points', steps=2048,
+    ),
+    # Oscillators & Harmonographs
     'Second-order oscillator': RecurrencePlot('2*cos(w)*x-x[n-2]', '2*cos(w)*y-y[n-2]',
         order=2, initial=((1., 0., 0.), (math.cos(.1), .5*math.sin(.1), 0.)),
         variables=(Variable('w', .1, .001, 1.),)),
+    'Damped harmonograph': RecurrencePlot(
+        '2*damp*cos(wx)*x - damp*damp*x[n-2]',
+        '2*damp*cos(wy)*y - damp*damp*y[n-2]',
+        '0.25*sin(0.04*n)',
+        order=2, initial=((0.9, 0.0, 0.), (0.9*math.cos(0.12), 0.9*math.sin(0.181), 0.)),
+        steps=2048,
+        variables=(Variable('wx', 0.12, 0.02, 0.5), Variable('wy', 0.181, 0.02, 0.5), Variable('damp', 0.9992, 0.99, 1.0)),
+    ),
+    # Procedural & Phyllotaxis
     'Sunflower': RecurrencePlot('sqrt(n/N)*cos(n*pi*(3-sqrt(5)))',
         'sqrt(n/N)*sin(n*pi*(3-sqrt(5)))', draw='points'),
 }
+
+RECURRENCE_GROUPS = (
+    ('3D Strange Attractors (ODE)', ('Lorenz attractor', 'Rössler attractor', 'Aizawa attractor',
+                                     'Thomas attractor', 'Halvorsen attractor', 'Dadras attractor')),
+    ('2D Chaotic Maps', ('Hénon map', 'Clifford attractor', 'Peter de Jong attractor',
+                         'Gumowski–Mira attractor', 'Svensson attractor', 'Ikeda map', 'Tinkerbell map')),
+    ('Oscillators & Harmonographs', ('Second-order oscillator', 'Damped harmonograph')),
+    ('Procedural & Phyllotaxis', ('Sunflower',)),
+)

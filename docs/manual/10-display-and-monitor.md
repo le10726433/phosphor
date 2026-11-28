@@ -72,6 +72,8 @@ window, full screen, the pop-out monitor and video export all look the same in
 proportion, at any display scaling. The pixel values above apply when the scope's
 short side is 720 pixels; a larger scope draws them proportionally larger.
 
+Glow controls are available on Medium, High and Ultra. Glass vignette is available on High and Ultra with phosphor enabled. Switching tiers keeps your settings.
+
 Double-click any slider to reset it.
 
 ### Phosphor
@@ -97,6 +99,8 @@ Double-click any slider to reset it.
 | **Beam shimmer (0 = steady)** | 0–1 (0) | A slight flicker in the beam's brightness. |
 
 ### Decay
+
+The plot follows the selected graphics quality, including the linear-light colour blend and P7 afterglow on High and Ultra.
 
 ![Appearance › Decay](images/panel-appearance-decay.png)
 *Appearance › Decay: the decay plot with the flash and afterglow points.*

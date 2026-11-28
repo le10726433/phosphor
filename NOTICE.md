@@ -24,6 +24,10 @@ under its own license. Versions are those pinned for the release builds.
 | PyAudioWPatch (Windows only) | WASAPI system-audio capture | Apache-2.0 | https://github.com/s0d3s/PyAudioWPatch |
 | JetBrains Mono | Interface font | SIL Open Font License 1.1 ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)) | https://github.com/JetBrains/JetBrainsMono |
 | PyInstaller bootloader | App launcher | GPL-2.0-or-later with the PyInstaller bootloader exception | https://pyinstaller.org |
+| Poly Haven textures and HDRI (oak_veneer_01, plastered_wall_02, studio_small_08, and maps derived from them) | 3D Lab Bench materials and lighting | CC0 1.0 ([assets/textures/desk3d/LICENSE.txt](phosphor/assets/textures/desk3d/LICENSE.txt)) | https://polyhaven.com |
+
+Optional, not shipped in the apps: wgpu-py and rendercanvas (BSD-2-Clause), for the 3D Lab
+Bench's live path tracer when run from source.
 
 Build-only tools, not shipped in the apps: PyInstaller and its hooks (GPL-2.0-or-later
 with exception), Pillow (MIT-CMU) for the icons, altgraph and macholib (MIT).

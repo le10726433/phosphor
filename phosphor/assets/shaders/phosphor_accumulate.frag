@@ -17,7 +17,14 @@ layout(std140, binding = 0) uniform buf {
     float fastGain;
     float slowGain;
     float stepScale;
+    float idleStepScale;
+    float cascadeWeight;
+    float frameIndex;
     float shimmerScale;
+    float softSat;   // 0 = off, >0 = physically bounded excitation saturation.
+    float powerLaw;  // 0 = exponential, >0 = Becquerel energy-dependent slow tail.
+    float cascade;   // 0 = off, >0 = fast-to-slow optical energy transfer (P7).
+    float tailKeep;  // Capped reference-frame retention scaled to elapsed time.
 };
 layout(binding = 1) uniform sampler2D previous;
 layout(binding = 2) uniform sampler2D deposit;
@@ -29,10 +36,18 @@ float unpack(vec2 packed) {
     return (floor(packed.x * 255.0 + 0.5) + packed.y) / 255.0 * MAX_ENERGY;
 }
 
-vec2 pack(float value) {
+// A cubic permutation modulo the prime 4091. Products fit exactly in float32,
+// including on the legacy GLSL path. Each pixel visits every threshold once.
+float packingOffset(vec2 pixel) {
+    float key = mod(dot(floor(pixel), vec2(73.0, 151.0)) + frameIndex * 197.0, 4091.0);
+    float phase = mod(mod(key * key, 4091.0) * key, 4091.0);
+    return (phase + 0.5) / 4091.0 - 0.5;
+}
+
+vec2 pack(float value, float offset) {
     float scaled = clamp(value / MAX_ENERGY, 0.0, 0.99998) * 255.0;
     float high = floor(scaled);
-    return vec2(high / 255.0, scaled - high);
+    return vec2(high / 255.0, scaled - high + offset / 255.0);
 }
 
 float hash12(vec2 p) {
@@ -43,6 +58,10 @@ float hash12(vec2 p) {
 
 void main() {
     vec4 old = texture(previous, qt_TexCoord0);
+    if (stepScale == 0.0) {
+        fragColor = old;
+        return;
+    }
     vec4 added = texture(deposit, qt_TexCoord0);
     // A Gaussian deposit arrives packed in RG; a hard-edged one is plain 8-bit.
     float blurred = (floor(added.r * 255.0 + 0.5) + added.g) / 255.0 * depositGain;
@@ -58,7 +77,27 @@ void main() {
     }
     addFast *= fastGain;
     addSlow *= slowGain;
-    float fast = max(0.0, unpack(old.rg) * fastKeep + addFast - STEP * stepScale);
-    float slow = max(0.0, unpack(old.ba) * slowKeep + addSlow - STEP * stepScale);
-    fragColor = vec4(pack(fast), pack(slow));
+    float oldFast = unpack(old.rg);
+    float oldSlow = unpack(old.ba);
+    if (softSat > 0.0) {
+        // Excited phosphor has fewer ground-state atoms left to excite.
+        float fastRoom = 1.0 - clamp(oldFast / MAX_ENERGY, 0.0, 0.96);
+        float slowRoom = 1.0 - clamp(oldSlow / MAX_ENERGY, 0.0, 0.96);
+        addFast *= mix(1.0, fastRoom, softSat);
+        addSlow *= mix(1.0, slowRoom, softSat);
+    }
+    float effSlowKeep = slowKeep;
+    if (powerLaw > 0.0 && oldSlow > 0.0) {
+        // Becquerel power-law tail: dim afterglow decays slower than bright peaks.
+        float tailBoost = powerLaw * 0.45 / (1.0 + oldSlow * 2.0);
+        effSlowKeep = mix(slowKeep, tailKeep, tailBoost);
+    }
+    // STEP from before the sample window can exhaust the old energy only.
+    float idleLoss = STEP * idleStepScale;
+    float sampleLoss = STEP * (stepScale - idleStepScale);
+    float fast = max(0.0, oldFast * fastKeep - idleLoss) + addFast - sampleLoss;
+    float cascadeAdd = oldFast * cascadeWeight * cascade;
+    float slow = max(0.0, oldSlow * effSlowKeep + cascadeAdd - idleLoss) + addSlow - sampleLoss;
+    float offset = packingOffset(gl_FragCoord.xy);
+    fragColor = vec4(pack(fast, offset), pack(slow, offset));
 }

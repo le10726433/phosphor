@@ -3,9 +3,10 @@
 Display only; nothing here touches audio. Decay times are approximate visual
 presets for each phosphor family, not measured tube data.
 """
+from functools import lru_cache
 import math
 import numpy as np
-from phosphor.display.qt_geometry import BEAM_VERTEX, stroke_triangles
+from phosphor.display.qt_geometry import BEAM_VERTEX, segment_quads
 
 PHOSPHOR_OFF = 'Off (line trace)'
 PHOSPHOR_PALETTE = 'Palette colour'
@@ -25,6 +26,15 @@ PROFILE_COLORS = ('flash_color', 'afterglow_color')
 BEAM_HARD = 'Hard edge'
 BEAM_GAUSSIAN = 'Gaussian'
 BEAM_PROFILES = (BEAM_HARD, BEAM_GAUSSIAN)
+QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH, QUALITY_ULTRA = 'Low', 'Medium', 'High', 'Ultra'
+GRAPHICS_QUALITIES = (QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH, QUALITY_ULTRA)
+DEFAULT_GRAPHICS_QUALITY = QUALITY_HIGH
+POWER_LAW = .35
+P7 = 'P7 blue / long yellow'
+P7_CASCADE = .18
+GRID_SIMPLE, GRID_GRATICULE = 'Simple', 'Graticule'
+GRID_STYLES = (GRID_SIMPLE, GRID_GRATICULE)
+DEFAULT_GRID_STYLE = GRID_GRATICULE
 REFERENCE_SIDE = 720.
 REFERENCE_FRAME = 1/60
 MIN_SIGMA, MAX_SIGMA = 1., 24.  # Physical pixels; below 1 the thin core's aliasing shows.
@@ -94,34 +104,49 @@ def stroke_deposit(points, width, scale, strength, spot_width=None, energy_width
     points = np.asarray(points, dtype=np.float32)
     if len(points) < 2:
         return np.empty(0, dtype=BEAM_VERTEX)
-    every_length = np.linalg.norm(points[1:]-points[:-1], axis=1)
-    drawn = np.ones(len(every_length), dtype=bool) if drawn is None else np.asarray(drawn, dtype=bool)
-    spots = spot_deposit(points, np.where(drawn, every_length, BLANKED_LENGTH), width if spot_width is None else spot_width, scale, view_scale=view_scale)
-    vertices = stroke_triangles(points, width)
-    if not len(vertices):
+    a, b = points[:-1], points[1:]
+    delta = b - a
+    every_length = np.hypot(delta[:, 0], delta[:, 1])
+    if drawn is None:
+        spots = spot_deposit(points, every_length, width if spot_width is None else spot_width, scale, view_scale=view_scale)
+        keep = every_length >= STATIONARY_LENGTH
+    else:
+        drawn = np.asarray(drawn, dtype=bool)
+        spots = spot_deposit(points, np.where(drawn, every_length, BLANKED_LENGTH), width if spot_width is None else spot_width, scale, view_scale=view_scale)
+        keep = drawn & (every_length >= STATIONARY_LENGTH)
+    if not keep.any():
         return spots
-    visible = drawn[every_length > 1e-6]
-    lengths = every_length[every_length > 1e-6]
-    moving = np.repeat(lengths >= STATIONARY_LENGTH, 6)
+    kept_lengths = every_length[keep]
     # A sample's energy spreads over its footprint, so overlapping wide strokes sum to 1/speed.
-    lengths = np.maximum(lengths/view_scale, max(energy_width/view_scale, .5))
-    levels = scale*ENERGY_SCALE/lengths**strength*(energy_width/width)
-    levels = np.repeat(np.clip(np.rint(levels), 0, 255), 6)
-    keep = (levels > 0) & moving & np.repeat(visible, 6)
-    result = np.empty(int(np.count_nonzero(keep)), dtype=BEAM_VERTEX)
-    result['x'], result['y'] = vertices[keep, 0], vertices[keep, 1]
-    result['r'] = result['g'] = levels[keep]
+    eff_lengths = np.maximum(kept_lengths/view_scale, max(energy_width/view_scale, .5))
+    levels = np.clip(np.rint(scale*ENERGY_SCALE/eff_lengths**strength*(energy_width/width)), 0, 255)
+    positive = levels > 0
+    if not positive.any():
+        return spots
+    if not positive.all():
+        indices = np.flatnonzero(keep)[positive]
+        vertices = segment_quads(a[indices], b[indices], delta[indices], every_length[indices], width)
+        levels = levels[positive]
+    else:
+        vertices = segment_quads(a[keep], b[keep], delta[keep], kept_lengths, width)
+    result = np.empty(len(vertices), dtype=BEAM_VERTEX)
+    result['x'], result['y'] = vertices[:, 0], vertices[:, 1]
+    result['r'] = result['g'] = np.repeat(levels, 6)
     result['b'] = result['a'] = 0
-    return np.concatenate((result, spots))
+    return np.concatenate((result, spots)) if len(spots) else result
 
 
 def deposit_vertices(points, width, strength, glow_bands=(), spot_width=None, energy_width=None, drawn=None, *, view_scale=1.):
     """Core plus lower-energy glow bands, all following the same beam-speed strength."""
+    core = stroke_deposit(points, width, 1., strength, spot_width, energy_width, drawn, view_scale=view_scale)
+    if not glow_bands:
+        return core
     parts = [stroke_deposit(points, band, scale, strength, drawn=drawn, view_scale=view_scale) for band, scale in glow_bands]
-    parts.append(stroke_deposit(points, width, 1., strength, spot_width, energy_width, drawn, view_scale=view_scale))
+    parts.append(core)
     return np.concatenate(parts)
 
 
+@lru_cache(maxsize=64)
 def hex_color(value):
     return tuple(int(value[index:index+2], 16)/255 for index in (1, 3, 5))
 
@@ -169,6 +194,11 @@ def bloom_gain(thickness, sigma, intensity):
     return intensity*BLOOM_PEAK*math.sqrt(2*math.pi)*sigma/max(thickness, .1)
 
 
+# phosphor_bloom_down.frag box-averages at most this many texels per axis (MAX_FACTOR).
+# bloom_uniforms and halo_uniforms never choose a larger downsampling factor.
+BLOOM_DOWN_MAX_FACTOR = 32
+
+
 def bloom_uniforms(enabled, thickness, glow_size, intensity, pixel_ratio, width, height, *, view_scale=1.):
     """Shader inputs for glow drawn as bloom of the energy buffer, or bloom switched off.
 
@@ -189,19 +219,58 @@ def bloom_uniforms(enabled, thickness, glow_size, intensity, pixel_ratio, width,
                 bloomTexelX=(1/size[0], 0.), bloomTexelY=(0., 1/size[1]))
 
 
+def halo_uniforms(enabled, width, height, pixel_ratio):
+    """Coarse wide-angle faceplate halation pass (High and Ultra tiers)."""
+    if not enabled or width <= 0 or height <= 0:
+        return dict(haloOn=False, haloTexOn=0.)
+    pixels = (max(1, round(width*pixel_ratio)), max(1, round(height*pixel_ratio)))
+    factor = 12 if max(pixels) >= 512 else 8
+    size = tuple(max(1, math.ceil(extent/factor)) for extent in pixels)
+    return dict(haloOn=True, haloTexOn=1., haloFactor=float(factor), haloSigma=6.0,
+                haloSize=size, haloTexelX=(1/size[0], 0.), haloTexelY=(0., 1/size[1]))
+
+
+def quality_uniforms(quality, phosphor_name, vignette, grid_on, grid_style, grid_divisions, bloom_on, bloom_gain_value):
+    """Visual simulation uniforms gated by the independent graphics quality tier."""
+    if quality == QUALITY_LOW:
+        return dict(softSat=0., powerLaw=0., cascade=0., haloGain=0., linearTone=0.,
+                    vignette=0., edgeGraticule=0., gridDivisions=float(grid_divisions))
+    if quality == QUALITY_MEDIUM:
+        return dict(softSat=1., powerLaw=0., cascade=0., haloGain=0., linearTone=0.,
+                    vignette=0., edgeGraticule=0., gridDivisions=float(grid_divisions))
+    cascade = P7_CASCADE if phosphor_name == P7 else 0.
+    has_bloom = bool(bloom_on and bloom_gain_value > 0.)
+    if quality == QUALITY_ULTRA:
+        return dict(softSat=1., powerLaw=POWER_LAW, cascade=cascade,
+                    haloGain=.22 if has_bloom else 0., linearTone=1.,
+                    vignette=float(vignette),
+                    edgeGraticule=.18 if (grid_on and grid_style == GRID_GRATICULE) else 0.,
+                    gridDivisions=float(grid_divisions))
+    # High (default)
+    return dict(softSat=1., powerLaw=POWER_LAW, cascade=cascade,
+                haloGain=.14 if has_bloom else 0., linearTone=1.,
+                vignette=float(vignette), edgeGraticule=0.,
+                gridDivisions=float(grid_divisions))
+
+
 def color_hex(rgb):
     return '#'+''.join(f'{round(min(1., max(0., channel))*255):02x}' for channel in rgb)
 
 
-def preset_profile(name, trace_color):
-    """A preset as an editable profile. Its afterglow level is the gain the display uses:
-    the preset's slow gain scaled back for long decay, which piles up more energy."""
+@lru_cache(maxsize=32)
+def _preset_profile(name, trace_color):
     preset = PHOSPHORS[name]
     palette = hex_color(trace_color)
     return dict(flash_time=preset['fast'], afterglow_time=preset['slow'],
                 afterglow_level=preset['slow_gain']*min(1., SLOW_REFERENCE/preset['slow']),
                 flash_color=color_hex(preset.get('fast_color', palette)),
                 afterglow_color=color_hex(preset.get('slow_color', palette)))
+
+
+def preset_profile(name, trace_color):
+    """A preset as an editable profile. Its afterglow level is the gain the display uses:
+    the preset's slow gain scaled back for long decay, which piles up more energy."""
+    return dict(_preset_profile(name, trace_color))
 
 
 DEFAULT_CUSTOM_PROFILE = preset_profile(PHOSPHOR_P31, '#000000')
@@ -237,23 +306,73 @@ def frame_gain(dt, tau):
     return f(REFERENCE_FRAME/tau)/f(dt/tau)
 
 
-def phosphor_uniforms(profile, elapsed, intensity):
+def tail_keep(tau, elapsed):
+    """Scale the capped 60 Hz tail retention to this step's duration."""
+    reference = math.exp(-REFERENCE_FRAME/tau)
+    return min(.992, max(reference, 1e-5)**.65)**(elapsed/REFERENCE_FRAME)
+
+
+def phosphor_uniforms(profile, elapsed, intensity, *, decay_elapsed=None):
     """Shader inputs for a decay profile; decay stays correct at any frame interval."""
     elapsed = max(0., elapsed)
-    return dict(fastKeep=math.exp(-elapsed/profile['flash_time']), slowKeep=math.exp(-elapsed/profile['afterglow_time']),
+    dt = elapsed if decay_elapsed is None else max(0., decay_elapsed)
+    # Once STEP alone exhausts both packed channels, additional idle time is immaterial.
+    dt = min(dt, 2 * 65025 * REFERENCE_FRAME)
+    flash, glow = profile['flash_time'], profile['afterglow_time']
+    fast_keep = math.exp(-dt/flash)
+    slow_keep = math.exp(-dt/glow)
+    transfer = 1-fast_keep
+    if dt > REFERENCE_FRAME:
+        # Flash transferred early in a long frame has already faded by its end.
+        # Sum the 60 Hz exponential cascade in closed form, also for fractional frames.
+        f, s = math.exp(-REFERENCE_FRAME/flash), math.exp(-REFERENCE_FRAME/glow)
+        spread = ((slow_keep-fast_keep)/(s-f) if abs(s-f) > 1e-9 else
+                  (dt/REFERENCE_FRAME)*math.exp(-(dt-REFERENCE_FRAME)/flash))
+        transfer = (1-f)*spread
+    return dict(fastKeep=fast_keep, slowKeep=slow_keep, cascadeWeight=transfer,
+                tailKeep=tail_keep(profile['afterglow_time'], dt),
                 fastGain=frame_gain(elapsed, profile['flash_time']),
                 slowGain=frame_gain(elapsed, profile['afterglow_time']),
-                stepScale=elapsed/REFERENCE_FRAME if elapsed else 1.,
+                stepScale=dt/REFERENCE_FRAME,
+                idleStepScale=max(0., dt-elapsed)/REFERENCE_FRAME,
                 shimmerScale=math.sqrt(elapsed/REFERENCE_FRAME) if elapsed else 1.,
                 afterglowGain=profile['afterglow_level'], exposure=EXPOSURE*intensity,
                 fastColor=hex_color(profile['flash_color']), slowColor=hex_color(profile['afterglow_color']))
 
 
+ENERGY_UNIT = 64/65025  # One low-byte quantum in the packed energy buffer.
 PREVIEW_ENERGY = .5  # Energy one pass of the beam leaves on a pixel, for the decay preview.
 HOT_WHITE = .08  # Matches phosphor_display.frag.
 
 
-def decay_preview(profile, intensity, times):
+def _decay_step(fast, slow, fast_keep, slow_keep, tail, cascade, steps, power_law=POWER_LAW):
+    """One no-deposit accumulate-shader update, before texture quantization."""
+    keep = slow_keep + (tail-slow_keep) * (power_law*.45/(1+2*slow))
+    bleed = ENERGY_UNIT*steps
+    return (np.maximum(0., fast*fast_keep-bleed),
+            np.maximum(0., slow*keep+fast*(1-fast_keep)*cascade-bleed))
+
+
+def _preview_energy(profile, times, quality, name):
+    # Follow the mean (unquantized) 60 Hz trajectory, then step each fractional frame.
+    simulated = quality in (QUALITY_HIGH, QUALITY_ULTRA)
+    power_law = POWER_LAW if simulated else 0.
+    cascade = P7_CASCADE if simulated and name == P7 else 0.
+    steps = times/REFERENCE_FRAME
+    whole = steps.astype(int)
+    count = int(whole.max(initial=0)) + 1
+    fast, slow = np.empty(count), np.empty(count)
+    fast[0] = slow[0] = PREVIEW_ENERGY
+    fk = math.exp(-REFERENCE_FRAME/profile['flash_time'])
+    sk = math.exp(-REFERENCE_FRAME/profile['afterglow_time'])
+    tail = tail_keep(profile['afterglow_time'], REFERENCE_FRAME)
+    for i in range(1, count):
+        fast[i], slow[i] = _decay_step(fast[i-1], slow[i-1], fk, sk, tail, cascade, 1., power_law)
+    part = steps-whole
+    return _decay_step(fast[whole], slow[whole], fk**part, sk**part, tail**part, cascade, part, power_law)
+
+
+def decay_preview(profile, intensity, times, quality=DEFAULT_GRAPHICS_QUALITY, name=PHOSPHOR_CUSTOM):
     """Light after one beam pass, as phosphor_display.frag tone-maps it.
 
     Returns the flash and afterglow brightness and the displayed colour at each time.
@@ -262,20 +381,25 @@ def decay_preview(profile, intensity, times):
     """
     times = np.asarray(times, dtype=float)
     exposure = EXPOSURE*intensity
-    fast_energy = PREVIEW_ENERGY*np.exp(-times/profile['flash_time'])
-    slow_energy = PREVIEW_ENERGY*np.exp(-times/profile['afterglow_time'])
+    fast_energy, slow_energy = _preview_energy(profile, times, quality, name)
     level = profile['afterglow_level']
     flash = 1-np.exp(-fast_energy*exposure)
     afterglow = 1-np.exp(-slow_energy*exposure*level)
-    light = (np.outer(flash, hex_color(profile['flash_color']))
-             + np.outer(afterglow, hex_color(profile['afterglow_color'])))
+    fast_light = np.outer(flash, hex_color(profile['flash_color']))
+    slow_light = np.outer(afterglow, hex_color(profile['afterglow_color']))
+    linear = quality in (QUALITY_HIGH, QUALITY_ULTRA)
+    light = fast_light**2.2 + slow_light**2.2 if linear else fast_light + slow_light
     hot = 1-np.exp(-(fast_energy+slow_energy*level)*exposure*HOT_WHITE)
     light = light+(1-light)*(.7*hot*hot)[:, None]
-    return flash, afterglow, np.minimum(light, 1.)
+    light = np.minimum(light, 1.)
+    return flash, afterglow, light**(1/2.2) if linear else light
 
 
-def afterglow_level_at(profile, intensity, brightness):
+def afterglow_level_at(profile, intensity, brightness, quality=DEFAULT_GRAPHICS_QUALITY, name=PHOSPHOR_CUSTOM):
     """Inverse of decay_preview's afterglow at its own decay time, for dragging the curve."""
-    exposure = EXPOSURE*intensity*PREVIEW_ENERGY*math.exp(-1)
-    brightness = min(max(brightness, 0.), .9999)
-    return min(1., max(0., -math.log(1-brightness)/exposure))
+    _, slow = _preview_energy(profile, np.array([profile['afterglow_time']]), quality, name)
+    exposure = EXPOSURE*intensity*slow[0]
+    if exposure == 0: return profile['afterglow_level']
+    if brightness <= 0.: return 0.
+    if brightness >= -math.expm1(-exposure): return 1.
+    return -math.log1p(-brightness)/exposure

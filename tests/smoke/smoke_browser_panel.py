@@ -158,27 +158,41 @@ with tempfile.TemporaryDirectory() as folder:
             browser.tabs.setCurrentIndex(4)
             wait(lambda: 'cube.obj' in browser.models.names(), message='models tab')
 
-            # Equations: Sandbox, double-click a built-in: one new Equation object, one Undo step.
+            # Equations: Sandbox, double-click a built-in Parametric & Recurrence: one Undo step each.
             w.set_workspace(SANDBOX); app.processEvents()
             browser.tabs.setCurrentIndex(2); app.processEvents()
-            assert 'Helix' in browser.equations.names()
+            assert 'Helix' in browser.equations.names() and 'Lorenz attractor' in browser.equations.names()
             count = len(w.scene.settings.shapes)
             browser.equations.run(browser.equations.item_named('Helix')); app.processEvents()
             assert len(w.scene.settings.shapes) == count + 1 and w.scene.shape.solid == q.PARAMETRIC_OBJECT
             assert w.scene.shape.plot == PRESETS['Helix'], w.scene.shape.plot
             w.undo(); app.processEvents()
             assert len(w.scene.settings.shapes) == count
+            browser.equations.run(browser.equations.item_named('Lorenz attractor')); app.processEvents()
+            assert len(w.scene.settings.shapes) == count + 1 and w.scene.shape.solid == q.RECURRENCE_OBJECT
+            w.undo(); app.processEvents()
+            assert len(w.scene.settings.shapes) == count
 
-            # Transforms: a saved step is listed and inserts into the selected object.
+            # Objects tab: double-clicking adds a built-in shape directly.
+            browser.tabs.setCurrentIndex(5); app.processEvents()
+            assert 'Clock face' in browser.objects.names() and 'Cube' in browser.objects.names()
+            browser.objects.run(browser.objects.item_named('Clock face')); app.processEvents()
+            assert w.scene.shape.solid == 'Clock face'
+            w.undo(); app.processEvents()
+
+            # Transforms: built-in Recipes and saved steps are listed and insert into the selected object.
             w.add_object('Cube'); app.processEvents()
             panel = w.transform_panel
             panel.add(ROTATE); app.processEvents()
             assert panel.save_step(0, name='Tilt')
             browser.tabs.setCurrentIndex(3); app.processEvents()
-            assert browser.transforms.names() == ['Tilt'], browser.transforms.names()
+            assert 'Tilt' in browser.transforms.names() and '3D Turntable' in browser.transforms.names(), browser.transforms.names()
             before = len(w.scene.shape.transforms)
             browser.transforms.run(browser.transforms.item_named('Tilt')); app.processEvents()
             assert len(w.scene.shape.transforms) == before + 1
+            before = len(w.scene.shape.transforms)
+            browser.transforms.run(browser.transforms.item_named('3D Turntable')); app.processEvents()
+            assert len(w.scene.shape.transforms) == before + 3
 
             # Hide from Effects during a preview, then reopen on the remembered page.
             browser.start_preview(root / 'tone.wav')

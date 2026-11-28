@@ -11,6 +11,8 @@ from phosphor.display.phosphor import (ENERGY_SCALE, BEAM_GAUSSIAN, BEAM_HARD, M
                       decay_preview, phosphor_profile, preset_profile, validated_profile, deposit_vertices, gaussian_beam, new_sample_count, phosphor_uniforms, stroke_deposit)
 from phosphor.display.phosphor import FWHM_TO_SIGMA, REFERENCE_FRAME, frame_gain, spot_deposit, view_scale
 from phosphor.display.frame_step import step_display
+from phosphor.display.phosphor import (P7, QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH, QUALITY_ULTRA,
+                                      P7_CASCADE, POWER_LAW, _decay_step, hex_color)
 
 
 class DisplayScaleTests(unittest.TestCase):
@@ -157,7 +159,203 @@ class DepositTests(unittest.TestCase):
         self.assertLess(both['r'][0], core['r'][0])
 
 
+UNIT = 64/65025
+PIXELS = np.arange(256).reshape(16, 16)
+PIXEL_KEY = (PIXELS % 16)*73 + (PIXELS // 16)*151
+
+
+def accumulate_step(fast, slow, u, frame, deposit=0., *, power_law=0., cascade=0., soft_sat=0.):
+    """Mirror the feedback shader and both UNORM8 stores over a 16 × 16 patch."""
+    if u['stepScale'] == 0:
+        return fast, slow
+    key = (PIXEL_KEY + (frame % 4091)*197) % 4091
+    offset = ((key*key % 4091)*key % 4091 + .5)/4091 - .5
+
+    def pack(value):
+        scaled = np.clip(value/64, 0., .99998)*255
+        high = np.floor(scaled)
+        low = np.clip(np.floor((scaled-high)*255 + offset + .5), 0, 255)
+        return (high*255 + low)*UNIT
+
+    fk, sk = u['fastKeep'], u['slowKeep']
+    keep = sk + (u['tailKeep']-sk)*power_law*.45/(1+2*slow)
+    idle_loss = UNIT*u['idleStepScale']
+    bleed = UNIT*(u['stepScale']-u['idleStepScale'])
+    def excitation(old, gain):
+        return deposit*gain*(1 - soft_sat*np.clip(old/64, 0., .96))
+    moved = fast*u['cascadeWeight']*cascade
+    return (pack(np.maximum(0., fast*fk-idle_loss) + excitation(fast, u['fastGain']) - bleed),
+            pack(np.maximum(0., slow*keep+moved-idle_loss) + excitation(slow, u['slowGain']) - bleed))
+
+
+def reference_frame(fast, slow, profile, power_law, cascade):
+    """Unquantized, no-deposit reference, independent of the display uniforms."""
+    fk = math.exp(-REFERENCE_FRAME/profile['flash_time'])
+    sk = math.exp(-REFERENCE_FRAME/profile['afterglow_time'])
+    tail = min(.992, max(sk, 1e-5)**.65)
+    keep = sk+(tail-sk)*power_law*.45/(1+2*slow)
+    return max(0., fast*fk-UNIT), max(0., slow*keep+fast*(1-fk)*cascade-UNIT)
+
+
+class ContinuousDecayTests(unittest.TestCase):
+    LONG = dict(DEFAULT_CUSTOM_PROFILE, flash_time=.5, afterglow_time=5.)
+    TIERS = ((QUALITY_LOW, 0., 0.), (QUALITY_MEDIUM, 0., 0.),
+             (QUALITY_HIGH, POWER_LAW, P7_CASCADE), (QUALITY_ULTRA, POWER_LAW, P7_CASCADE))
+    RATES = {'60': [REFERENCE_FRAME], '30': [1/30], '144': [1/144], '240': [1/240],
+             'irregular': [1/90, 1/165, 1/110, 1/144, 1/48, .0213, 1/300]}
+
+    def test_dim_pixels_reach_black_near_the_reference_time(self):
+        for tier, power_law, cascade in self.TIERS:
+            for rate, intervals in self.RATES.items():
+                with self.subTest(tier=tier, rate=rate):
+                    fast, slow = 30*UNIT, 100*UNIT
+                    extinction = np.zeros(PIXELS.shape)
+                    elapsed = 0.
+                    for frame in range(1, 1001):
+                        dt = intervals[(frame-1) % len(intervals)]
+                        elapsed += dt
+                        u = phosphor_uniforms(self.LONG, dt, 1.)
+                        fast, slow = accumulate_step(fast, slow, u, frame, power_law=power_law, cascade=cascade)
+                        extinction[(extinction == 0) & (fast == 0) & (slow == 0)] = elapsed
+                        if not np.any(fast) and not np.any(slow):
+                            break
+                    self.assertTrue(np.all(extinction > 0))
+                    if rate == '60':
+                        reference = extinction.mean()
+                    self.assertAlmostEqual(extinction.mean(), reference, delta=.05)
+                    self.assertLess(extinction.max(), reference+.5)
+
+    def test_mean_packed_energy_tracks_the_60_hz_curve(self):
+        for tier, power_law, cascade in self.TIERS:
+            for rate, intervals in self.RATES.items():
+                with self.subTest(tier=tier, rate=rate):
+                    fast = ref_fast = 2.
+                    slow = ref_slow = 1.
+                    frame = 0
+                    elapsed = 0.
+                    for checkpoint in range(1, 9):
+                        for _ in range(15):
+                            ref_fast, ref_slow = reference_frame(ref_fast, ref_slow, self.LONG, power_law, cascade)
+                        while elapsed < checkpoint*.25-1e-12:
+                            dt = min(intervals[frame % len(intervals)], checkpoint*.25-elapsed)
+                            elapsed += dt
+                            frame += 1
+                            u = phosphor_uniforms(self.LONG, dt, 1.)
+                            fast, slow = accumulate_step(fast, slow, u, frame, power_law=power_law, cascade=cascade)
+                        np.testing.assert_allclose([fast.mean(), slow.mean()], [ref_fast, ref_slow], atol=1.5*UNIT, rtol=.002)
+
+    def test_steady_trace_has_no_reference_clock_strobe(self):
+        for name in ('P31 green', P7):
+            profile = preset_profile(name, '#00ff00')
+            for rate in (60, 144, 240):
+                with self.subTest(name=name, rate=rate):
+                    dt = 1/rate
+                    u = phosphor_uniforms(profile, dt, 1.)
+                    fast = slow = 0.
+                    means = []
+                    warmup = math.ceil(12*profile['afterglow_time']*rate)
+                    for frame in range(1, warmup+rate+1):
+                        fast, slow = accumulate_step(fast, slow, u, frame, 12*dt, power_law=POWER_LAW,
+                                                     soft_sat=1., cascade=P7_CASCADE if name == P7 else 0.)
+                        if frame > warmup:
+                            means.append((fast.mean(), slow.mean()))
+                    swing = np.ptp(means, axis=0)/np.mean(means, axis=0)
+                    self.assertTrue(np.all(swing < .001), swing)
+
+    def test_zero_elapsed_and_one_second_stall(self):
+        for tier, power_law, cascade in self.TIERS:
+            start = (3000*UNIT, 1500*UNIT)
+            u = phosphor_uniforms(self.LONG, 0., 1.)
+            self.assertEqual((u['fastKeep'], u['slowKeep'], u['tailKeep'], u['stepScale']), (1., 1., 1., 0.))
+            self.assertEqual(accumulate_step(*start, u, 42, deposit=1.), start)
+            ref = start
+            for _ in range(60):
+                ref = reference_frame(*ref, self.LONG, power_law, cascade)
+            u = phosphor_uniforms(self.LONG, 1., 1.)
+            result = accumulate_step(*start, u, 42, power_law=power_law, cascade=cascade)
+            # The lumped STEP loss differs from 60 losses that each decay further.
+            np.testing.assert_allclose([v.mean() for v in result], ref, atol=.04, rtol=.01)
+
+    def test_live_sample_window_and_decay_interval_are_independent(self):
+        points = np.array([(0., 0.), (10., 0.)])
+        scope = SimpleNamespace(width=lambda: 720., height=lambda: 720., screen_points=lambda: points)
+        layer = Mock()
+        host = SimpleNamespace(scope=scope, view=SimpleNamespace(devicePixelRatio=lambda: 1.), phosphor=layer)
+        prefs = dict(DEFAULT_PREFERENCES, phosphor=PHOSPHOR_PALETTE, trace_interpolation='Off')
+        step_display(host, prefs, points, 1, .25, decay_elapsed=1.)
+        u = layer.step.call_args.args[1]
+        self.assertEqual(u['stepScale'], 60.)
+        tau = PHOSPHORS[PHOSPHOR_PALETTE]['slow']
+        self.assertAlmostEqual(u['slowKeep'], math.exp(-1/tau))
+        self.assertEqual(u['slowGain'], frame_gain(.25, tau))
+        self.assertEqual(u['idleStepScale'], 45.)
+
+        # The short P7 flash transfers early in the stall. Its contribution has
+        # already faded with the slow channel by the time playback resumes.
+        profile = preset_profile(P7, '#00ff00')
+        u = phosphor_uniforms(profile, .25, 1., decay_elapsed=1.)
+        start = (3000*UNIT, 1500*UNIT)
+        ref = start
+        for _ in range(60):
+            ref = reference_frame(*ref, profile, POWER_LAW, P7_CASCADE)
+        result = accumulate_step(*start, u, 42, power_law=POWER_LAW, cascade=P7_CASCADE)
+        np.testing.assert_allclose([v.mean() for v in result], ref, atol=.035)
+
+        # Even after a very long pause, only the sample window's STEP loss can
+        # consume its new deposit. All previous energy has faded.
+        u = phosphor_uniforms(profile, .25, 1., decay_elapsed=1e12)
+        self.assertTrue(all(math.isfinite(u[key]) for key in ('stepScale', 'idleStepScale', 'cascadeWeight')))
+        result = accumulate_step(63., 63., u, 4092, deposit=1., power_law=POWER_LAW, cascade=P7_CASCADE)
+        for channel, gain in zip(result, ('fastGain', 'slowGain')):
+            np.testing.assert_allclose(channel, u[gain]-15*UNIT, atol=UNIT)
+
+
 class PresetTests(unittest.TestCase):
+
+    def test_effective_afterglow_matches_reference_at_monitor_and_export_rates(self):
+        for profile in (preset_profile(P7, '#000000'), dict(DEFAULT_CUSTOM_PROFILE, afterglow_time=3.)):
+            ref_keep = math.exp(-REFERENCE_FRAME/profile['afterglow_time'])
+            ref_tail = min(.992, max(ref_keep, 1e-5)**.65)
+            reference = 2.
+            for _ in range(60):
+                weight = .35*.45/(1+2*reference)
+                reference = reference*((1-weight)*ref_keep + weight*ref_tail) - 64/65025
+            for hz in (30, 60, 144, 240):
+                u = phosphor_uniforms(profile, 1/hz, 1.)
+                slow = 2.
+                for _ in range(hz):
+                    _, slow = _decay_step(0., slow, u['fastKeep'], u['slowKeep'], u['tailKeep'], 0., u['stepScale'])
+                tau = -1/math.log(slow/2.)
+                expected = -1/math.log(reference/2.)
+                self.assertAlmostEqual(tau, expected, delta=expected*(1e-12 if hz == 60 else .001))
+
+    def test_preview_tone_and_energy_match_each_quality(self):
+        profile = preset_profile(P7, '#000000')
+        times = np.array([0., 1/60, 2/60])
+        intensity = 5.
+        exposure = intensity*1.2
+        for quality in (QUALITY_LOW, QUALITY_MEDIUM, QUALITY_HIGH, QUALITY_ULTRA):
+            linear = quality in (QUALITY_HIGH, QUALITY_ULTRA)
+            flash, glow, light = decay_preview(profile, intensity, times, quality, P7)
+            fast = slow = .5
+            for i in range(len(times)):
+                f = 1-math.exp(-fast*exposure)
+                s = 1-math.exp(-slow*exposure*profile['afterglow_level'])
+                hot = 1-math.exp(-(fast+slow*profile['afterglow_level'])*exposure*.08)
+                gamma = 2.2 if linear else 1.
+                rgb = ((f*np.array(hex_color(profile['flash_color'])))**gamma
+                       + (s*np.array(hex_color(profile['afterglow_color'])))**gamma)
+                np.testing.assert_allclose(light[i], np.clip(rgb+(1-rgb)*.7*hot**2, 0., 1.)**(1/gamma))
+                np.testing.assert_allclose((flash[i], glow[i]), (f, s))
+                fast, slow = reference_frame(fast, slow, profile, POWER_LAW if linear else 0.,
+                                             P7_CASCADE if linear else 0.)
+            _, handle, _ = decay_preview(profile, intensity, [profile['afterglow_time']], quality, P7)
+            self.assertAlmostEqual(afterglow_level_at(profile, intensity, handle[0], quality, P7),
+                                   profile['afterglow_level'])
+            bright = dict(profile, afterglow_level=.9)
+            _, handle, _ = decay_preview(bright, 64., [bright['afterglow_time']], quality, P7)
+            self.assertAlmostEqual(afterglow_level_at(bright, 64., handle[0], quality, P7), .9)
+
     def test_decay_is_exponential_and_frame_rate_independent(self):
         profile = preset_profile('P7 blue / long yellow', '#00ff00')
         single = phosphor_uniforms(profile, .032, 1.)
@@ -196,11 +394,39 @@ class PresetTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validated_profile(bad)
 
+    def test_preview_removes_step_like_the_packed_display_on_every_tier(self):
+        # B2 #7: a 5 s afterglow from energy .5 is nearly black at 5 s (black by 6 s), not .5/e.
+        profile = dict(DEFAULT_CUSTOM_PROFILE, flash_time=.05, afterglow_time=5.)
+        u = phosphor_uniforms(profile, REFERENCE_FRAME, 1.)
+        intensity = 5.
+        exposure = 1.2*intensity*profile['afterglow_level']
+        for tier, power_law in ((QUALITY_LOW, 0.), (QUALITY_MEDIUM, 0.), (QUALITY_HIGH, POWER_LAW), (QUALITY_ULTRA, POWER_LAW)):
+            with self.subTest(tier=tier):
+                fast, slow = .5, .5
+                mirrored = {}
+                for tick in range(1, 361):
+                    fast, slow = accumulate_step(fast, slow, u, tick, power_law=power_law)
+                    mirrored[tick] = slow.mean()
+                times = [3., 4., 4.5, 6.]
+                _, afterglow, _ = decay_preview(profile, intensity, times, tier)
+                for t, light in zip(times, afterglow):
+                    energy = -math.log1p(-light)/exposure
+                    self.assertAlmostEqual(energy, mirrored[round(t*60)], delta=4*UNIT, msg=t)
+                self.assertGreater(afterglow[2], 0.)
+                self.assertEqual(afterglow[3], 0.)
+                if tier in (QUALITY_LOW, QUALITY_MEDIUM):
+                    # The old pure exponential was still at .5/e at the decay time.
+                    _, at_decay, _ = decay_preview(profile, intensity, [5.], tier)
+                    self.assertLess(at_decay[0], (1-math.exp(-.5/math.e*exposure))/4)
+                self.assertEqual(mirrored[360], 0.)
+
     def test_decay_preview_matches_the_display_and_fades_between_colours(self):
         profile = preset_profile('P7 blue / long yellow', '#000000')
         times = np.array([.001, .02, .2, 2.])
-        flash, afterglow, light = decay_preview(profile, 5., times)
-        self.assertTrue(np.all(np.diff(flash) < 0) and np.all(np.diff(afterglow) < 0))
+        flash, afterglow, light = decay_preview(profile, 5., times, QUALITY_MEDIUM)
+        # Non-increasing: STEP takes the flash, then the afterglow, to black.
+        self.assertTrue(np.all(np.diff(flash) <= 0) and np.all(np.diff(afterglow) <= 0))
+        self.assertTrue(flash[0] > flash[1] and afterglow[0] > afterglow[1] > afterglow[2])
         self.assertTrue(np.all(light <= 1) and np.all(light >= 0))
         # Blue flash first, yellow afterglow later.
         self.assertGreater(light[0, 2], light[0, 0])
@@ -364,8 +590,10 @@ class DisplayChainTests(unittest.TestCase):
             profile = preset_profile(name, '#00ff00')
             for elapsed in (REFERENCE_FRAME, 0.):
                 u = phosphor_uniforms(profile, elapsed, 1.)
-                for key in ('fastGain', 'slowGain', 'stepScale', 'shimmerScale'):
+                for key in ('fastGain', 'slowGain', 'shimmerScale'):
                     self.assertEqual(u[key], 1., (name, elapsed, key))
+                # One reference frame of decay at 60 Hz; none (and no STEP) for no time.
+                self.assertEqual(u['stepScale'], elapsed/REFERENCE_FRAME)
 
     def test_display_rate_preferences_default_round_trip_and_validation(self):
         old = {k: v for k, v in DEFAULT_PREFERENCES.items() if k != 'display_rate'}
@@ -387,7 +615,7 @@ class DisplayChainTests(unittest.TestCase):
                      '240': [1/240], 'jitter': [1/90, 1/165, 1/110, 1/144]}
 
         def integrate(profile, intensity, sequence, single):
-            energy = np.zeros(2)
+            fast = slow = 0.
             total = np.zeros(3)
             colors = np.array([profile['flash_color'], profile['afterglow_color']])
             colors = np.array([[int(c[j:j+2], 16)/255 for j in (1, 3, 5)] for c in colors])
@@ -396,14 +624,12 @@ class DisplayChainTests(unittest.TestCase):
                 dt = min(sequence[index % len(sequence)], .5-elapsed)
                 u = phosphor_uniforms(profile, dt, intensity)
                 deposit = (.5 if index == 0 else 0.) if single else 3.*dt
-                energy = np.maximum(0., energy*np.array([u['fastKeep'], u['slowKeep']])
-                    + deposit*np.array([u['fastGain'], u['slowGain']])
-                    - (64/65025)*u['stepScale'])
-                weighted = energy*np.array([1., u['afterglowGain']])
+                fast, slow = accumulate_step(fast, slow, u, index+1, deposit)
+                weighted = np.stack((fast, slow*u['afterglowGain']), axis=-1)
                 light = (1-np.exp(-weighted*u['exposure'])) @ colors
-                hot = 1-np.exp(-weighted.sum()*u['exposure']*.08)
+                hot = 1-np.exp(-weighted.sum(axis=-1, keepdims=True)*u['exposure']*.08)
                 light = np.minimum(light+(1-light)*(.7*hot*hot), 1.)
-                total += light*dt
+                total += light.mean(axis=(0, 1))*dt
                 elapsed += dt; index += 1
             return total.sum()
 

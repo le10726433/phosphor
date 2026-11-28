@@ -1,4 +1,5 @@
 """Quarter-note tempo maps and bar-based meters, independent of Qt."""
+from bisect import bisect_right
 from dataclasses import dataclass
 from functools import lru_cache
 import math
@@ -41,17 +42,33 @@ class TempoMap:
         validate_changes(self.changes)
 
     def seconds(self, beats):
+        if isinstance(beats, (int, float, np.floating, np.integer)):
+            b = float(beats)
+            if not self.changes:
+                return b * 60. / self.bpm
+            _, _, _, starts_t, seconds_t, rates_t = _segments(self.bpm, self.changes)
+            i = bisect_right(starts_t, b) - 1
+            if i < 0: i = 0
+            return seconds_t[i] + (b - starts_t[i]) * rates_t[i]
         if not self.changes:
             return np.asarray(beats, dtype=float) * 60. / self.bpm
-        starts, seconds, rates = _segments(self.bpm, self.changes)
+        starts, seconds, rates = _segments(self.bpm, self.changes)[:3]
         values = np.asarray(beats, dtype=float)
         index = np.maximum(0, np.searchsorted(starts, values, side='right') - 1)
         return seconds[index] + (values - starts[index]) * rates[index]
 
     def beats(self, seconds):
+        if isinstance(seconds, (int, float, np.floating, np.integer)):
+            s = float(seconds)
+            if not self.changes:
+                return s * self.bpm / 60.
+            _, _, _, starts_t, boundaries_t, rates_t = _segments(self.bpm, self.changes)
+            i = bisect_right(boundaries_t, s) - 1
+            if i < 0: i = 0
+            return starts_t[i] + (s - boundaries_t[i]) / rates_t[i]
         if not self.changes:
             return np.asarray(seconds, dtype=float) * self.bpm / 60.
-        starts, boundaries, rates = _segments(self.bpm, self.changes)
+        starts, boundaries, rates = _segments(self.bpm, self.changes)[:3]
         values = np.asarray(seconds, dtype=float)
         index = np.maximum(0, np.searchsorted(boundaries, values, side='right') - 1)
         return starts[index] + (values - boundaries[index]) / rates[index]
@@ -64,7 +81,7 @@ def _segments(bpm, changes):
     seconds = np.r_[0., np.cumsum(np.diff(starts) * rates[:-1])]
     for array in (starts, seconds, rates):
         array.setflags(write=False)
-    return starts, seconds, rates
+    return starts, seconds, rates, tuple(starts.tolist()), tuple(seconds.tolist()), tuple(rates.tolist())
 
 
 @dataclass(frozen=True)
@@ -73,8 +90,18 @@ class BeatClock:
     origin_beats: float = 0.
     beat_offset: float = 0.  # Automation lanes may start after the scene's time origin.
 
+    def _origin_seconds(self):
+        cached = self.__dict__.get('_origin_sec')
+        if cached is None:
+            cached = float(self.tempo_map.seconds(self.origin_beats))
+            object.__setattr__(self, '_origin_sec', cached)
+        return cached
+
     def beats(self, local_seconds):
-        return self.tempo_map.beats(self.tempo_map.seconds(self.origin_beats) + np.asarray(local_seconds)) - self.origin_beats - self.beat_offset
+        origin_sec = self._origin_seconds()
+        if isinstance(local_seconds, (int, float, np.floating, np.integer)):
+            return self.tempo_map.beats(origin_sec + float(local_seconds)) - self.origin_beats - self.beat_offset
+        return self.tempo_map.beats(origin_sec + np.asarray(local_seconds)) - self.origin_beats - self.beat_offset
 
 
 class Meter:
@@ -101,6 +128,12 @@ class Meter:
     def beats_per_bar_at(self, beats):
         index = np.maximum(0, np.searchsorted(self.starts, beats, side='right') - 1)
         return self.lengths[index]
+
+    def bar_range(self, start, end):
+        """One-based inclusive bar numbers for a half-open interval of beats."""
+        first, _ = self.bar_of(start)
+        last, offset = self.bar_of(end)
+        return int(first) + 1, max(int(first) + 1, int(last) + int(offset > 0))
 
     def bar_lines(self, b0, b1):
         first = int(self.bar_of(b0)[0])

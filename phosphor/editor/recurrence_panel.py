@@ -4,7 +4,7 @@ from PySide6.QtCore import QSignalBlocker
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSpinBox, QComboBox,
                                QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy)
 from phosphor.editor.function_panel import FunctionPanel, _Message
-from phosphor.engine.recurrence import (RecurrencePlot, Variable, compiled_recurrence,
+from phosphor.engine.recurrence import (RecurrencePlot, Variable, RECURRENCE_GROUPS, compiled_recurrence,
                                        validate_plot, sequence)
 from phosphor.storage.recurrence_presets import RECURRENCE_STORE
 
@@ -21,7 +21,9 @@ def _caption(text):
 class RecurrencePanel(FunctionPanel):
     compile_plot = staticmethod(compiled_recurrence)
     validate_plot = staticmethod(validate_plot)
-    store = RECURRENCE_STORE  # Six built-ins plus USER_DIR/recurrence-presets.json.
+    store = RECURRENCE_STORE  # Built-in attractors/maps plus USER_DIR/recurrence-presets.json.
+    preset_groups = RECURRENCE_GROUPS
+    reference_tokens = ('x', 'y', 'z', 'x[n-1]', 'y[n-1]', 'z[n-1]', 'n', 'N', 't', 'p', 'sin()', 'cos()')
     variable_help = ('Time varying: an expression of t (seconds) and p (beats), evaluated once per pose '
                      'and clipped to min–max. No s. Press Enter to apply; right-click › Static for the slider.')
     variable_placeholder = 'f(t, p)'

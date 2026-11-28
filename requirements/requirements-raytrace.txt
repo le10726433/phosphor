@@ -1,0 +1,6 @@
+# Optional: the live GPU path tracer in the 3D lab bench (press T there).
+# phosphor runs without it; the bench then keeps its Qt Quick 3D rendering.
+# Install on top of the runtime requirements:
+#   python -m pip install -r requirements/requirements-raytrace.txt
+wgpu
+rendercanvas

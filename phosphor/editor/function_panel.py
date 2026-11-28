@@ -3,11 +3,12 @@ from dataclasses import replace
 import math
 import re
 
-from PySide6.QtCore import Qt, Signal, QSignalBlocker
+from PySide6.QtCore import QEvent, Qt, Signal, QSignalBlocker, QTimer
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QComboBox,
-                               QInputDialog, QMessageBox)
+                               QInputDialog, QMenu, QMessageBox, QToolButton)
 
-from phosphor.engine.function_plot import (FunctionPlot, Variable, PRESETS, MAX_VARIABLES,
+from phosphor.engine.function_plot import (FunctionPlot, Variable, PRESETS, PARAMETRIC_GROUPS, MAX_VARIABLES,
                                            compiled_plot, validate_plot)
 from phosphor.engine.object_replace import renamed_clashes
 from phosphor.storage import function_presets as saved_presets
@@ -40,9 +41,12 @@ class FunctionPanel(QWidget):
     """Edits a FunctionPlot. Emits changed(plot) only with plots that compile."""
     changed = Signal(object)
     automate = Signal(str, bool)  # Variable name, on (Composer only).
+    add_3d_view = Signal()  # 1-click helper to append 3D Spin & Perspective for 3D equations.
     compile_plot = staticmethod(compiled_plot)
     validate_plot = staticmethod(validate_plot)
     store = saved_presets.FUNCTION_STORE  # Built-in and saved presets (subclasses swap it).
+    preset_groups = PARAMETRIC_GROUPS
+    reference_tokens = ('s', 't', 'p', 'tau', 'sin()', 'cos()', 'tri()', 'saw()', 'abs()', 'sqrt()', 'exp()', 'clip()')
     variable_help = VARIABLE_HELP
     variable_placeholder = 'f(t, s)'
 
@@ -50,8 +54,10 @@ class FunctionPanel(QWidget):
         super().__init__()
         self.slider_class = slider_class
         self.automation_allowed = False
-        self.reserved = set()  # The object's own variables (Transform › Variables, T5): refused here.
+        self._reserved = set()  # The object's own variables (Transform › Variables, T5): refused here.
         self.plot = plot or FunctionPlot()
+        self._live_timer = QTimer(self); self._live_timer.setSingleShot(True); self._live_timer.setInterval(250)
+        self._live_timer.timeout.connect(self._live_validate)
         # No layout alignment: an aligned layout is placed at its size hint, which ignores the wrapped help line's
         # height for width (UI2: it lost a line at a 280 px panel). The panel is never given spare height.
         layout = QVBoxLayout(self); layout.setSpacing(6)
@@ -59,39 +65,145 @@ class FunctionPanel(QWidget):
         row = FlowRow(); layout.addLayout(row)  # Wraps in a narrow panel (UI2).
         self.presets = QComboBox(); self.presets.setObjectName('function_presets'); row.addWidget(self.presets, 1)
         self.presets.activated.connect(self.load_preset)
+        self.browse_button = QPushButton('Browse'); self.browse_button.setObjectName('browse_presets')
+        self.browse_button.setProperty('menuButton', True)
+        self.browse_button.setToolTip('Browse equation presets grouped by category')
+        self._browse_menu = QMenu(self.browse_button)
+        self.browse_button.setMenu(self._browse_menu)
+        row.addWidget(self.browse_button)
         self.save_button = QPushButton('Save…'); self.save_button.setToolTip('Save these equations as a preset')
         self.save_button.clicked.connect(self.save_preset); row.addWidget(self.save_button)
         self.delete_button = QPushButton('Delete…'); self.delete_button.setToolTip('Delete a saved preset')
         self.delete_button.clicked.connect(self.delete_preset); row.addWidget(self.delete_button)
-        for button in (self.save_button, self.delete_button): button.setMinimumWidth(button.sizeHint().width())
+        for button in (self.browse_button, self.save_button, self.delete_button): button.setMinimumWidth(button.sizeHint().width())
         self.presets_path = self.store.path
         self.saved = {}
         self.last_saved_name = ''
         self.entries = {}
+        mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         for axis in ('x', 'y', 'z'):
             row = QHBoxLayout(); layout.addLayout(row)
             row.addWidget(_caption(f'{axis} ='))
             entry = QLineEdit(); entry.setObjectName(f'function_{axis}'); entry.setPlaceholderText(f'{axis}(t, s)')
+            entry.setFont(mono_font)
+            entry.installEventFilter(self)
+            entry.textEdited.connect(lambda _text, e=entry: (setattr(self, '_last_entry', e), self._live_timer.start()))
             entry.editingFinished.connect(lambda axis=axis: self.expression_edited(axis))
             row.addWidget(entry, 1); self.entries[axis] = entry
+        self._last_entry = self.entries['x']
         self.error = _Message(); self.error.setObjectName('function_error'); self.error.setWordWrap(True); self.error.hide(); layout.addWidget(self.error)
         self.variable_box = QWidget(); self.variable_layout = QVBoxLayout(self.variable_box)
         self.variable_layout.setContentsMargins(0, 0, 0, 0); self.variable_layout.setSpacing(4)
         layout.addWidget(self.variable_box)
         row = QHBoxLayout(); layout.addLayout(row)
         self.add_button = QPushButton('Add variable'); self.add_button.clicked.connect(self.add_variable); row.addWidget(self.add_button)
-        row.addStretch(1)
+        self.preset_status = QLabel(''); self.preset_status.setObjectName('preset_status')
+        row.addWidget(self.preset_status, 1)
+        self.ref_toggle = QToolButton(self); self.ref_toggle.setObjectName('equation_ref_toggle')
+        self.ref_toggle.setText('? Tokens'); self.ref_toggle.setCheckable(True)
+        self.ref_toggle.setToolTip('Show/hide clickable math tokens to insert at cursor')
+        self.ref_toggle.toggled.connect(lambda on: self.ref_drawer.setVisible(on))
+        row.addWidget(self.ref_toggle)
         # The help line has its own word-wrapped row under the button (UI1: beside it, it was clipped).
         help = QLabel(HELP[0]+' · hover for functions'); help.setObjectName('function_help')
         help.setToolTip('\n'.join((help.text(), *HELP[1:], 'Pitch comes from the source; with the Single tone source, the Frequency slider at the bottom of SCENE sets how often s runs 0–1, in Hz.',
                                     'Transform moves, sizes and rotates the curve.')))
         help.setWordWrap(True); layout.addWidget(help)
+        # Collapsible quick-reference clickable token chips drawer
+        self.ref_drawer = QWidget(); self.ref_drawer.setObjectName('equation_ref_drawer')
+        self._ref_flow = FlowRow(); self.ref_drawer.setLayout(self._ref_flow)
+        self._rebuild_ref_tokens()
+        layout.addWidget(self.ref_drawer); self.ref_drawer.hide()
+        # Cross-tab awareness of Transform › Variables (hidden when empty)
+        self.object_vars_label = _Message(); self.object_vars_label.setObjectName('equation_object_vars')
+        self.object_vars_label.setWordWrap(True); self.object_vars_label.hide(); layout.addWidget(self.object_vars_label)
+        # Smart contextual helper for 3D curves/attractors without rotation/spin yet
+        self._has_3d_rotation = False
+        self.spin3d_bar = QWidget(); self.spin3d_bar.setObjectName('spin3d_hint_bar')
+        s3_row = FlowRow(); self.spin3d_bar.setLayout(s3_row)
+        s3_lbl = QLabel('3D curve ·'); s3_lbl.setWordWrap(True)
+        self.spin3d_button = QPushButton('+ Add 3D Spin & Perspective'); self.spin3d_button.setObjectName('add_3d_spin_btn')
+        self.spin3d_button.setToolTip('Append Rotate + Spin + Perspective so this 3D curve rotates smoothly in depth.')
+        self.spin3d_button.clicked.connect(self.add_3d_view.emit)
+        s3_row.addWidget(s3_lbl); s3_row.addWidget(self.spin3d_button)
+        layout.addWidget(self.spin3d_bar); self.spin3d_bar.hide()
         self.variable_rows = None
         self.set_plot(self.plot, force=True)
         self.reload_presets()
 
+    @property
+    def reserved(self):
+        return self._reserved
+
+    @reserved.setter
+    def reserved(self, names):
+        self._reserved = set(names or ())
+        if hasattr(self, 'object_vars_label'):
+            if self._reserved:
+                self.object_vars_label.setText('Object vars (Transform): ' + ', '.join(sorted(self._reserved)))
+            else:
+                self.object_vars_label.setText('')
+
+    def _rebuild_ref_tokens(self):
+        while self._ref_flow.count():
+            item = self._ref_flow.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        for tok in self.reference_tokens:
+            btn = QToolButton(self.ref_drawer)
+            btn.setText(tok)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setToolTip(f'Insert "{tok}" into the active expression field')
+            btn.clicked.connect(lambda _=False, t=tok: self.insert_token(t))
+            self._ref_flow.addWidget(btn)
+
+    def insert_token(self, token):
+        target = self._last_entry if self._last_entry is not None else self.entries['x']
+        target.insert(token)
+        if token.endswith('()'):
+            target.setCursorPosition(target.cursorPosition() - 1)
+        target.setFocus()
+        self._live_timer.start()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.FocusIn and watched in self.entries.values():
+            self._last_entry = watched
+        return super().eventFilter(watched, event)
+
+    def _live_validate(self):
+        draft = replace(self.plot, x=self.entries['x'].text(), y=self.entries['y'].text(), z=self.entries['z'].text())
+        if draft == self.plot:
+            return
+        try:
+            self.validate_plot(draft)
+        except ValueError as error:
+            self.error.setText(str(error))
+            return
+        self.error.setText('')
+
+    def _sync_preset_status(self):
+        if not hasattr(self, 'preset_status'): return
+        for name, p in self.store.builtins.items():
+            if p == self.plot:
+                self.preset_status.setText(f'Preset: {name}')
+                return
+        for name, p in self.saved.items():
+            if p == self.plot:
+                self.preset_status.setText(f'Preset: ★ {name}')
+                return
+        self.preset_status.setText('Custom')
+
+    def set_has_3d_rotation(self, has_rot):
+        self._has_3d_rotation = bool(has_rot)
+        self._sync_spin3d_bar()
+
+    def _sync_spin3d_bar(self):
+        z_text = (getattr(self.plot, 'z', '0') or '0').strip()
+        is_3d = z_text not in ('', '0', '0.0', '0.')
+        self.spin3d_bar.setVisible(is_3d and not self._has_3d_rotation)
+
     # Display -----------------------------------------------------------------
     def set_plot(self, plot, force=False):
+        self._live_timer.stop()
         if plot == self.plot and not force: return
         structure = [(v.name, v.low, v.high) for v in plot.variables]
         rebuild = force or structure != [(v.name, v.low, v.high) for v in self.plot.variables]
@@ -104,6 +216,8 @@ class FunctionPanel(QWidget):
                 blocker = QSignalBlocker(row['value']); row['value'].set_param(Param(variable.value, variable.expression, variable.points))
         self.add_button.setEnabled(len(plot.variables) < MAX_VARIABLES)
         self.error.setText('')
+        self._sync_spin3d_bar()
+        self._sync_preset_status()
 
     def build_variables(self):
         while self.variable_layout.count():
@@ -152,6 +266,8 @@ class FunctionPanel(QWidget):
         if rebuild: self.build_variables()
         self.add_button.setEnabled(len(plot.variables) < MAX_VARIABLES)
         self.error.setText('')
+        self._sync_spin3d_bar()
+        self._sync_preset_status()
         if plot != previous: self.changed.emit(plot)
         return True
 
@@ -177,19 +293,48 @@ class FunctionPanel(QWidget):
             self.presets.insertSeparator(self.presets.count())
             for name in self.saved: self.presets.addItem(f'★ {name}', ('saved', name))
         self.delete_button.setEnabled(bool(self.saved))
+        self._rebuild_browse_menu()
+        self._sync_preset_status()
 
-    def load_preset(self, index):
-        source = self.presets.itemData(index)
-        blocker = QSignalBlocker(self.presets); self.presets.setCurrentIndex(0)
-        if not source: return
-        kind, name = source
-        plot = self.store.builtins[name] if kind == 'builtin' else self.saved[name]
+    def _rebuild_browse_menu(self):
+        menu = self._browse_menu
+        menu.clear()
+        seen = set()
+        for group_title, names in self.preset_groups:
+            sub = menu.addMenu(group_title)
+            for name in names:
+                if name in self.store.builtins:
+                    seen.add(name)
+                    sub.addAction(name, lambda n=name: self.load_named_preset('builtin', n))
+        leftover = [n for n in self.store.builtins if n not in seen]
+        if leftover:
+            sub = menu.addMenu('Other')
+            for name in leftover:
+                sub.addAction(name, lambda n=name: self.load_named_preset('builtin', n))
+        if self.saved:
+            menu.addSeparator()
+            sub = menu.addMenu('★ Saved')
+            for name in self.saved:
+                sub.addAction(name, lambda n=name: self.load_named_preset('saved', n))
+
+    def load_named_preset(self, kind, name):
+        plot = self.store.builtins.get(name) if kind == 'builtin' else self.saved.get(name)
+        if plot is None: return False
         if kind == 'saved': self.last_saved_name = name
         notices = []  # A preset variable named like an object variable is renamed (T5).
         plot = renamed_clashes(plot, self.reserved, notices)
         if self.propose(plot, rebuild=True):
             self.set_plot(plot, force=True)
             if notices: self.error.setText(' '.join(notices))
+            return True
+        return False
+
+    def load_preset(self, index):
+        source = self.presets.itemData(index)
+        blocker = QSignalBlocker(self.presets); self.presets.setCurrentIndex(0)
+        if not source: return
+        kind, name = source
+        self.load_named_preset(kind, name)
 
     def apply_pending_edits(self):
         """Apply typed but unentered expressions; False if one does not compile."""

@@ -7,9 +7,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtQuick import QQuickItem,QSGNode,QSGGeometryNode,QSGGeometry,QSGFlatColorMaterial,QSGVertexColorMaterial
 from phosphor.display.crt_theme import PALETTES
-from phosphor.display.qt_geometry import BEAM_VERTEX, beam_triangles, stroke_triangles, grid_lines
+from phosphor.display.qt_geometry import BEAM_VERTEX, beam_triangles, stroke_triangles, grid_lines, graticule_lines
 from phosphor.display.glow_trail import GlowTrail, VISUAL_DEFAULTS
-from phosphor.display.phosphor import view_scale
+from phosphor.display.phosphor import DEFAULT_GRAPHICS_QUALITY, DEFAULT_GRID_STYLE, GRID_GRATICULE, QUALITY_LOW, view_scale
 
 # Editing overlays (scope.overlays, bottom to top): guides, muted outlines, the three
 # orientation axes, the position and resize handles (UI1: their own layer, so they fade on
@@ -17,6 +17,9 @@ from phosphor.display.phosphor import view_scale
 # after the glow trail, so they draw above everything else.
 OVERLAY_LAYERS = 11
 BASE_OVERLAYS = 5
+_EMPTY_POINTS = np.empty((0, 2), dtype=np.float32)
+_EMPTY_BEAM = np.empty(0, dtype=BEAM_VERTEX)
+_TRANSPARENT = QColor('transparent')
 
 
 class GpuScope(QQuickItem):
@@ -34,10 +37,15 @@ class GpuScope(QQuickItem):
         self.trail_key = None
         self.trail_visible = set()
         self.extra_visible = set()  # Inspector overlay layers that hold vertices.
+        self._layer_empty = set()
+        self._beam_empty = True
+        self._overlay_cache = {}
         self.history_key = None
         self.scanlines = True
         self.divisions = 8
         self.show_grid = True
+        self.grid_style = DEFAULT_GRID_STYLE
+        self.graphics_quality = DEFAULT_GRAPHICS_QUALITY
         self.background_key = None
         # QSGGeometry keeps a pointer to this attribute set; retain its wrapper.
         self.attributes = QSGGeometry.defaultAttributes_Point2D()
@@ -82,6 +90,7 @@ class GpuScope(QQuickItem):
         node.setFlag(QSGNode.Flag.OwnsMaterial)
         root.appendChildNode(node)
         self.layers[index] = (node, geometry, material)
+        self._layer_empty.add(index)
 
     def create_beam_layer(self, root):
         node = QSGGeometryNode()
@@ -96,8 +105,15 @@ class GpuScope(QQuickItem):
         node.setFlag(QSGNode.Flag.OwnsMaterial)
         root.appendChildNode(node)
         self.beam_layer = (node, geometry, material)
+        self._beam_empty = True
 
     def upload_beam(self, vertices):
+        if not len(vertices):
+            if self._beam_empty:
+                return
+            self._beam_empty = True
+        else:
+            self._beam_empty = False
         node, geometry, _ = self.beam_layer
         if geometry.vertexCount() != len(vertices):
             geometry.allocate(len(vertices))
@@ -108,16 +124,25 @@ class GpuScope(QQuickItem):
 
     def screen_points(self):
         w, h = self.width(), self.height()
-        return self.signal * np.array([.45*min(w, h), -.45*min(w, h)]) + [w/2, h/2]
+        half = .45*min(w, h)
+        return self.signal * np.array([half, -half], dtype=np.float32) + np.array([w/2, h/2], dtype=np.float32)
 
     def trace_polylines(self):
         return self.polylines if self.polylines is not None else [self.screen_points()]
 
     def strokes(self, polylines, width):
+        if len(polylines) == 1:
+            return stroke_triangles(polylines[0], width)
         parts = [stroke_triangles(points, width) for points in polylines]
-        return np.concatenate(parts) if parts else np.empty((0, 2), dtype=np.float32)
+        return np.concatenate(parts) if parts else _EMPTY_POINTS
 
     def upload(self, index, vertices, color):
+        if not len(vertices):
+            if index in self._layer_empty:
+                return
+            self._layer_empty.add(index)
+        else:
+            self._layer_empty.discard(index)
         node, geometry, material = self.layers[index]
         if geometry.vertexCount() != len(vertices):
             geometry.allocate(len(vertices))
@@ -133,6 +158,8 @@ class GpuScope(QQuickItem):
             old = QSGNode()
             self.root_node = old
             self.layers = [None]*(10+GlowTrail.CAPACITY*2+OVERLAY_LAYERS-BASE_OVERLAYS)
+            self._layer_empty.clear()
+            self._overlay_cache.clear()
             # Cached history sits behind the current trace and editing overlays.
             for index in (0,1,*range(10,10+GlowTrail.CAPACITY*2),*range(2,10),*range(10+GlowTrail.CAPACITY*2,len(self.layers))):
                 self.layer(old,index)
@@ -140,57 +167,94 @@ class GpuScope(QQuickItem):
             self.trail.reset(); self.trail_visible.clear(); self.trail_key = None
             self.background_key = None; self.extra_visible = set()
         w, h = self.width(), self.height()
-        key = (w, h, self.colors['grid'], self.divisions, self.scanlines, self.show_grid)
+        eff_grid_style = self.grid_style if self.graphics_quality != QUALITY_LOW else 'Simple'
+        key = (w, h, self.colors['grid'], self.divisions, self.scanlines, self.show_grid, eff_grid_style)
         if key != self.background_key:
-            strips = [stroke_triangles(line,1) for line in grid_lines(w,h,self.divisions)] if self.show_grid else []
-            self.upload(0, np.concatenate(strips) if strips else np.empty((0, 2)), QColor(self.colors['grid']))
+            if not self.show_grid:
+                strips = []
+            elif eff_grid_style == GRID_GRATICULE:
+                major, accent = graticule_lines(w, h, self.divisions)
+                strips = [stroke_triangles(line, 1.) for line in major] + [stroke_triangles(line, 1.6) for line in accent]
+            else:
+                strips = [stroke_triangles(line, 1.) for line in grid_lines(w, h, self.divisions)]
+            self.upload(0, np.concatenate(strips) if strips else _EMPTY_POINTS, QColor('#000000'))
             scan = [stroke_triangles([(0, y), (w, y)], .5) for y in range(0, int(h), 4)] if self.scanlines else []
             color = QColor(self.colors['grid']); color.setAlphaF(.3)
-            self.upload(1, np.concatenate(scan) if scan else np.empty((0, 2)), color)
+            self.upload(1, np.concatenate(scan) if scan else _EMPTY_POINTS, color)
             self.background_key = key
             self.background_builds += 1
-        polylines = self.trace_polylines()
-        s = view_scale(w, h)
-        thickness, glow_size = self.trace_thickness*s, self.glow_size*s
-        outer = thickness+2*glow_size
-        inner = thickness+2*glow_size/3
-        enabled = self.draw_trace and self.glow and self.glow_intensity > 0
-        trail_key = (w,h,s,self.trace_thickness,self.glow_size,self.glow_decay,self.colors['trace'],self.history_key)
-        if trail_key != self.trail_key:
-            self.trail.reset(); self.trail_key = trail_key
-        slot,weights = self.trail.update(getattr(self, 'frame_time', started),self.glow_decay,enabled)
-        for history,weight in enumerate(weights):
-            for band,width,opacity in ((0,outer,.045),(1,inner,.12)):
-                index = 10+history*2+band
-                if history == slot:
-                    self.upload(index,self.strokes(polylines,width),QColor('transparent'))
-                    self.trail_visible.add(index)
-                if weight > 0:
-                    color = QColor(self.colors['trace'])
-                    color.setAlphaF(opacity*self.glow_intensity*weight*.5)
-                    node,geometry,material = self.layers[index]
-                    material.setColor(color); node.markDirty(QSGNode.DirtyStateBit.DirtyMaterial)
-                elif index in self.trail_visible:
-                    self.upload(index,np.empty((0,2)),QColor('transparent'))
-                    self.trail_visible.discard(index)
-        for index, width, opacity in ((2, outer, .045*self.glow_intensity), (3, inner, .12*self.glow_intensity), (4, thickness, .95)):
-            color = QColor(self.colors['trace']); color.setAlphaF(opacity)
-            # Overlapping glow strokes already build up where the beam is slow.
-            visible = (index == 4 and self.draw_trace and self.beam_brightness <= 0) or (index != 4 and enabled)
-            vertices = self.strokes(polylines, width) if visible else np.empty((0, 2))
-            self.upload(index, vertices, color)
-        trace = QColor(self.colors['trace'])
-        beams = [beam_triangles(points, thickness, (trace.red(), trace.green(), trace.blue()), .95, self.beam_brightness)
-                 for points in polylines] if self.draw_trace and self.beam_brightness > 0 else []
-        self.upload_beam(np.concatenate(beams) if beams else np.empty(0, BEAM_VERTEX))
+        if self.draw_trace:
+            polylines = self.trace_polylines()
+            s = view_scale(w, h)
+            thickness, glow_size = self.trace_thickness*s, self.glow_size*s
+            outer = thickness+2*glow_size
+            inner = thickness+2*glow_size/3
+            enabled = self.graphics_quality != QUALITY_LOW and self.glow and self.glow_intensity > 0
+            trail_key = (w,h,s,self.trace_thickness,self.glow_size,self.glow_decay,self.colors['trace'],self.history_key)
+            if trail_key != self.trail_key:
+                self.trail.reset(); self.trail_key = trail_key
+            slot,weights = self.trail.update(getattr(self, 'frame_time', started),self.glow_decay,enabled)
+            for history,weight in enumerate(weights):
+                for band,width,opacity in ((0,outer,.045),(1,inner,.12)):
+                    index = 10+history*2+band
+                    if history == slot:
+                        self.upload(index,self.strokes(polylines,width),_TRANSPARENT)
+                        self.trail_visible.add(index)
+                    if weight > 0:
+                        color = QColor(self.colors['trace'])
+                        color.setAlphaF(opacity*self.glow_intensity*weight*.5)
+                        node,geometry,material = self.layers[index]
+                        material.setColor(color); node.markDirty(QSGNode.DirtyStateBit.DirtyMaterial)
+                    elif index in self.trail_visible:
+                        self.upload(index,_EMPTY_POINTS,_TRANSPARENT)
+                        self.trail_visible.discard(index)
+            for index, width, opacity in ((2, outer, .045*self.glow_intensity), (3, inner, .12*self.glow_intensity), (4, thickness, .95)):
+                visible = (index == 4 and self.beam_brightness <= 0) or (index != 4 and enabled)
+                if visible:
+                    color = QColor(self.colors['trace']); color.setAlphaF(opacity)
+                    self.upload(index, self.strokes(polylines, width), color)
+                else:
+                    self.upload(index, _EMPTY_POINTS, _TRANSPARENT)
+            if self.beam_brightness > 0:
+                trace = QColor(self.colors['trace'])
+                rgb = (trace.red(), trace.green(), trace.blue())
+                if len(polylines) == 1:
+                    self.upload_beam(beam_triangles(polylines[0], thickness, rgb, .95, self.beam_brightness))
+                else:
+                    beams = [beam_triangles(points, thickness, rgb, .95, self.beam_brightness) for points in polylines]
+                    self.upload_beam(np.concatenate(beams) if beams else _EMPTY_BEAM)
+            else:
+                self.upload_beam(_EMPTY_BEAM)
+        else:
+            if self.trail_visible:
+                self.trail.reset()
+                for index in tuple(self.trail_visible):
+                    self.upload(index, _EMPTY_POINTS, _TRANSPARENT)
+                self.trail_visible.clear()
+            for index in (2, 3, 4):
+                if index not in self._layer_empty:
+                    self.upload(index, _EMPTY_POINTS, _TRANSPARENT)
+            if not self._beam_empty:
+                self.upload_beam(_EMPTY_BEAM)
+        overlays = self.overlays
+        count = len(overlays)
         for index in range(OVERLAY_LAYERS):
-            vertices, color = self.overlays[index] if index < len(self.overlays) else (np.empty((0,2)), QColor('transparent'))
-            if index < BASE_OVERLAYS: self.upload(5+index, vertices, color); continue
-            slot = 10+GlowTrail.CAPACITY*2+index-BASE_OVERLAYS
-            if len(vertices): self.extra_visible.add(slot)
-            elif slot in self.extra_visible: self.extra_visible.discard(slot)
-            else: continue  # Inspector layers stay empty without re-uploading every frame.
+            vertices, color = overlays[index] if index < count else (_EMPTY_POINTS, _TRANSPARENT)
+            slot = 5 + index if index < BASE_OVERLAYS else 10 + GlowTrail.CAPACITY*2 + index - BASE_OVERLAYS
+            if not len(vertices):
+                self._overlay_cache.pop(slot, None)
+                if slot not in self._layer_empty:
+                    self.upload(slot, _EMPTY_POINTS, _TRANSPARENT)
+                if index >= BASE_OVERLAYS:
+                    self.extra_visible.discard(slot)
+                continue
+            rgba = color.rgba()
+            cached = self._overlay_cache.get(slot)
+            if cached is not None and cached[0] is vertices and cached[1] == rgba:
+                continue
+            self._overlay_cache[slot] = (vertices, rgba)
+            if index >= BASE_OVERLAYS:
+                self.extra_visible.add(slot)
             self.upload(slot, vertices, color)
         self.upload_ms.append((time.perf_counter()-started)*1000)
         return old
-

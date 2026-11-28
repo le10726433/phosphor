@@ -19,6 +19,7 @@ from phosphor.engine.object_replace import declaring_type
 from phosphor.engine.signal_engine import PARAMETRIC_OBJECT, is_motion_guide
 from phosphor.engine.recurrence import RECURRENCE_OBJECT
 from phosphor.engine.vector_text import TEXT_OBJECT
+from phosphor.engine.matrix_rain import MATRIX_OBJECT, MATRIX_FIELDS
 
 
 def automatable(clip):
@@ -29,6 +30,8 @@ def automatable(clip):
             keys.append(('on', i))
             keys.extend(('shape', i, name) for name in automation.SHAPE_LANE_FIELDS)
         keys.extend(('path', i, name) for name in ('path_start', 'path_trace'))
+        if shape.solid == MATRIX_OBJECT and shape.matrix is not None:
+            keys.extend(('matrix', i, field.name) for field in MATRIX_FIELDS)
         for j, step in enumerate(shape.transforms):
             keys.extend(('transform', i, j, field.name) for field in transforms.FIELDS[step.kind]
                         if not field.toggle and not field.integer and not field.formula)
@@ -67,6 +70,7 @@ def _number(clip, key):
     kind, *parts = key
     if kind == 'mix': return getattr(clip.settings, parts[0])
     shape = clip.settings.shapes[parts[0]]
+    if kind == 'matrix': return getattr(shape.matrix, parts[1])
     if kind == 'transform': return shape.transforms[parts[1]].param(parts[2])
     if kind == 'variable': return next(v for v in equation(shape).variables if v.name == parts[1])
     if kind == 'transform_variable': return next(v for v in shape.transform_variables if v.name == parts[1])
@@ -108,6 +112,8 @@ def set_points(clip, key, points):
         number = replace(_number(clip, key), points=points)
         if kind == 'path':
             shape = replace(shape, **{key[2]: number})
+        elif kind == 'matrix':
+            shape = replace(shape, matrix=replace(shape.matrix, **{key[2]: number}))
         elif kind == 'transform':
             steps = list(shape.transforms)
             steps[key[2]] = steps[key[2]].with_param(key[3], number)
@@ -150,6 +156,7 @@ def label(clip, key):
         return f'Variable {key[2]} (parked: {names[solid]})' if solid else f'Variable {key[2]} (parked)'
     return {'position_x': 'Position X', 'position_y': 'Position Y', 'shape_size': 'Size',
             'path_start': 'Path Start', 'path_trace': 'Path Trace',
+            'text_speed': 'Matrix Swap speed', 'fall_speed': 'Matrix Fall speed',
             'drawing_gain': 'Output level', 'music_gain': 'Original blend'}[key[-1]]
 
 
@@ -163,7 +170,7 @@ def static_value(clip, key):
         plot = shape.recurrence if solid == RECURRENCE_OBJECT else shape.plot
         return next(v.value for v in plot.variables if v.name == key[2])
     number = _number(clip, key)
-    return number.value if key[0] in ('transform', 'path', 'variable', 'transform_variable') else number
+    return number.value if key[0] in ('transform', 'path', 'matrix', 'variable', 'transform_variable') else number
 
 
 @dataclass(frozen=True)
@@ -176,7 +183,7 @@ class Block:
 def block_of(key):
     if not isinstance(key, tuple) or not key:
         raise ValueError(f'Invalid automation key: {key!r}')
-    lengths = {'mix': (2,), 'shape': (3,), 'path': (3,), 'variable': (3,), 'parked': (3,), 'transform_variable': (3,),
+    lengths = {'mix': (2,), 'shape': (3,), 'path': (3,), 'matrix': (3,), 'variable': (3,), 'parked': (3,), 'transform_variable': (3,),
                'transform': (4,), 'on': (2, 3)}
     if key[0] not in lengths or len(key) not in lengths[key[0]]:
         raise ValueError(f'Invalid automation key: {key!r}')
@@ -204,7 +211,7 @@ def blocks(clip, include=()):
                 j = group[2]
                 suffix = f'{j+1}. {clip.settings.shapes[group[1]].transforms[j].kind}'
             else:
-                suffix = {'shape': 'Placement', 'path': 'Path', 'variable': 'Equation', 'parked': 'Parked variables',
+                suffix = {'shape': 'Placement', 'path': 'Path', 'matrix': 'Matrix', 'variable': 'Equation', 'parked': 'Parked variables',
                           'transform_variable': 'Variables'}[kind]
             title = f'{names[group[1]]} › {suffix}'
         result.append(Block(group, title, tuple(keys)))

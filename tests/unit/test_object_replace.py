@@ -14,6 +14,7 @@ from phosphor.engine.lane_access import automatable, blocks, get_points, set_poi
 from phosphor.engine.model_object import MODEL_OBJECT
 from phosphor.engine.recurrence import RecurrencePlot, RECURRENCE_OBJECT
 from phosphor.engine.signal_engine import Settings, Shape, render, validate, posed_shapes
+from phosphor.engine.solids import ShapeParams, default_shape_params
 from phosphor.engine.transforms import Param, new_transform, ROTATE, SPIN
 from phosphor.engine.vector_text import TEXT_OBJECT, DEFAULT_TEXT
 from phosphor.storage.app_files import SCENE_VERSION, scene_document, scene_from_document
@@ -180,6 +181,32 @@ class ParkedLaneTest(unittest.TestCase):
 
 
 class StorageTest(unittest.TestCase):
+    def test_parked_shape_parameters_survive_scene_round_trip(self):
+        for solid, params in (('Star (5-point)', ShapeParams(points=7)),
+                              ('Gear (12-tooth)', ShapeParams(teeth=19))):
+            with self.subTest(solid=solid):
+                shape = Shape(solid=solid, shape_params=params)
+                restored, doc = round_trip(Settings(shapes=(r.replaced(shape, TEXT_OBJECT),)))
+                self.assertNotIn('shape_params', doc['shapes'][0])
+                self.assertEqual(doc['shapes'][0]['parked']['shape_params'], params.document())
+                self.assertEqual(r.replaced(restored.shapes[0], solid).shape_params, params)
+                # Radar uses the same record but edits a different field.
+                restored, _ = round_trip(Settings(shapes=(r.replaced(shape, 'Radar reticle'),)))
+                self.assertEqual(r.replaced(restored.shapes[0], solid).shape_params, params)
+
+    def test_shape_parameters_equal_to_the_replacement_defaults_survive_round_trip(self):
+        # An 8-point Star set to 5 points and inner radius .42 equals Gear's default record.
+        params = ShapeParams(points=5, inner_radius=0.42)
+        self.assertEqual(params, default_shape_params('Gear (12-tooth)'))
+        star = Shape(solid='Star (8-point)', shape_params=params)
+        gear = r.replaced(star, 'Gear (12-tooth)')
+        restored, doc = round_trip(Settings(shapes=(gear,)))
+        self.assertEqual(doc['shapes'][0]['shape_params'], {})
+        self.assertEqual(restored.shapes[0], gear)
+        back = r.replaced(restored.shapes[0], 'Star (8-point)')
+        self.assertEqual(back.shape_params, params)
+        self.assertEqual(back, r.replaced(gear, 'Star (8-point)'))
+
     def test_parked_data_saved_and_loaded(self):
         shape = placed(Shape(solid=PARAMETRIC_OBJECT, plot=plot(a=LANE)))
         shape = r.replaced(r.replaced(r.replaced(shape, TEXT_OBJECT), CUSTOM_OBJECT, custom=TRIANGLE), RECURRENCE_OBJECT)

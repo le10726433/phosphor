@@ -75,10 +75,23 @@ class FlowRow(QLayout):
     def setGeometry(self, rect):
         super().setGeometry(rect); self._place(rect, True)
 
+    def invalidate(self):
+        for item in self._items: item.invalidate()
+        super().invalidate()
+
+    @staticmethod
+    def _item_hint(item):
+        hint = item.sizeHint()
+        widget = item.widget()
+        if widget is not None:
+            wh = widget.sizeHint()
+            return QSize(max(hint.width(), wh.width()), max(hint.height(), wh.height()))
+        return hint
+
     def sizeHint(self):
         visible = [item for item in self._items if not item.isEmpty()]
-        width = sum(item.sizeHint().width() for item in visible) + self.spacing() * max(0, len(visible) - 1)
-        height = max((item.sizeHint().height() for item in visible), default=0)
+        width = sum(self._item_hint(item).width() for item in visible) + self.spacing() * max(0, len(visible) - 1)
+        height = max((self._item_hint(item).height() for item in visible), default=0)
         margins = self.contentsMargins()
         return QSize(width + margins.left() + margins.right(), height + margins.top() + margins.bottom())
 
@@ -97,8 +110,8 @@ class FlowRow(QLayout):
         lines, line, used = [], [], 0
         for item in self._items:
             if item.isEmpty(): continue
-            need = item.sizeHint().width() + (self.spacing() if line else 0)
-            if line and used + need > width: lines.append(line); line, used = [], 0; need = item.sizeHint().width()
+            need = self._item_hint(item).width() + (self.spacing() if line else 0)
+            if line and used + need > width: lines.append(line); line, used = [], 0; need = self._item_hint(item).width()
             line.append(item); used += need
         if line: lines.append(line)
         return lines
@@ -108,9 +121,9 @@ class FlowRow(QLayout):
         y = inner.y()
         for number, line in enumerate(self._lines(inner.width())):
             if number: y += self.spacing()
-            height = max(item.sizeHint().height() for item in line)
+            height = max(self._item_hint(item).height() for item in line)
             if apply:
-                widths = [min(item.sizeHint().width(), inner.width()) for item in line]
+                widths = [min(self._item_hint(item).width(), inner.width()) for item in line]
                 spare = inner.width() - sum(widths) - self.spacing() * (len(line) - 1)
                 growing = [i for i, item in enumerate(line) if item.widget() is None or
                            item.widget().sizePolicy().horizontalPolicy() != QSizePolicy.Policy.Fixed]
@@ -118,6 +131,10 @@ class FlowRow(QLayout):
                     widths[i] += spare // len(growing) + (1 if share < spare % len(growing) else 0)
                 x = inner.x()
                 for item, width in zip(line, widths):
-                    item.setGeometry(QRect(x, y, max(width, item.minimumSize().width()), height)); x += width + self.spacing()
+                    target = QRect(x, y, max(width, item.minimumSize().width()), height)
+                    widget = item.widget()
+                    if widget is not None: widget.setGeometry(target)
+                    else: item.setGeometry(target)
+                    x += width + self.spacing()
             y += height
         return y - rect.y() + margins.bottom()

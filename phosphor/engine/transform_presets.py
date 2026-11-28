@@ -10,9 +10,13 @@ storage/transform_presets.py.
 """
 from dataclasses import dataclass, replace
 
-from phosphor.engine.transforms import (MAX_OBJECT_VARIABLES, MAX_TRANSFORMS, TRANSFORM_RESERVED, Transform,
-                                        compiled_expression, read_object_variable, renamed_expression,
-                                        validate_object_variables, validate_stack, validate_transform, variable_names)
+from phosphor.engine.transforms import (
+    MAX_OBJECT_VARIABLES, MAX_TRANSFORMS, TRANSFORM_RESERVED, Param, Transform,
+    ROTATE, SPIN, TRANSLATE, SCALE, PERSPECTIVE, SUBDIVIDE, TWIST, WAVE,
+    KALEIDOSCOPE, ECHO, QUANTIZE, GLITCH, POINTIFY,
+    compiled_expression, read_object_variable, renamed_expression,
+    validate_object_variables, validate_stack, validate_transform, variable_names,
+)
 
 STEP, STACK = 'step', 'stack'
 KINDS = (STEP, STACK)
@@ -133,3 +137,36 @@ def inserted(transforms, variables, preset, index=None, mode=APPEND, taken=None,
     validate_object_variables(combined, taken)
     validate_stack(stack, combined)
     return stack, combined, first, len(steps)
+
+
+# Built-in starter transform stack recipes shown in Transform › Add › Recipes & Library Browser.
+BUILTIN_RECIPES = {
+    '3D Turntable': TransformPreset(STACK, (
+        Transform(ROTATE, (Param(22.), Param(0.), Param(0.))),
+        Transform(SPIN, (Param(0.), Param(0.18), Param(0.))),
+        Transform(PERSPECTIVE, (Param(3.2),)),
+    )),
+    'Subdivided Twist': TransformPreset(STACK, (
+        Transform(SUBDIVIDE, (Param(4.),)),
+        Transform(TWIST, (Param(0.), Param(140., '140*sin(tau*0.2*t)'), Param(0.))),
+    )),
+    'Organic Ripple': TransformPreset(STACK, (
+        Transform(SUBDIVIDE, (Param(4.),)),
+        Transform(WAVE, (Param(0.14), Param(3.), Param(1.2), Param(1.))),
+    )),
+    'Mandala Kaleidoscope': TransformPreset(STACK, (
+        Transform(SCALE, (Param(0.55), Param(0.55), Param(0.55))),
+        Transform(TRANSLATE, (Param(0.32), Param(0.), Param(0.))),
+        Transform(KALEIDOSCOPE, (Param(6.), Param(0.))),
+        Transform(SPIN, (Param(0.), Param(0.), Param(0.08))),
+    )),
+    'Echo Tunnel': TransformPreset(STACK, (
+        Transform(ECHO, (Param(5.), Param(0.82), Param(14.), Param(0.), Param(0.), Param(-0.18))),
+        Transform(PERSPECTIVE, (Param(2.8),)),
+    )),
+    'Bit-Crushed Glitch': TransformPreset(STACK, (
+        Transform(QUANTIZE, (Param(0.12), Param(0.12), Param(0.12))),
+        Transform(GLITCH, (Param(0.14), Param(8.), Param(10.))),
+        Transform(POINTIFY, (Param(96.), Param(0.05))),
+    )),
+}

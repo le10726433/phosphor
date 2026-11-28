@@ -2,17 +2,28 @@
 import numpy as np
 
 
+def segment_quads(a, b, delta, length, width):
+    """Two triangles per segment a[i]–b[i], reusing precomputed delta and length."""
+    if not len(length):
+        return np.empty((0, 2), dtype=np.float32)
+    scale = (width / 2) / length
+    normal = np.column_stack((-delta[:, 1] * scale, delta[:, 0] * scale))
+    a_plus = a + normal
+    a_minus = a - normal
+    b_plus = b + normal
+    b_minus = b - normal
+    return np.stack((a_plus, a_minus, b_plus, b_plus, a_minus, b_minus), axis=1).reshape(-1, 2)
+
+
 def stroke_triangles(points, width):
     points = np.asarray(points, dtype=np.float32)
     if len(points) < 2:
         return np.empty((0, 2), dtype=np.float32)
     a, b = points[:-1], points[1:]
     delta = b - a
-    length = np.linalg.norm(delta, axis=1)
+    length = np.hypot(delta[:, 0], delta[:, 1])
     keep = length > 1e-6
-    a, b, delta, length = a[keep], b[keep], delta[keep], length[keep]
-    normal = np.column_stack((-delta[:, 1], delta[:, 0])) * (width/2 / length[:, None])
-    return np.stack((a+normal, a-normal, b+normal, b+normal, a-normal, b-normal), axis=1).reshape(-1, 2).copy()
+    return segment_quads(a[keep], b[keep], delta[keep], length[keep], width)
 
 
 EDGE_ARRAYS_MAX = 16
@@ -48,11 +59,9 @@ def stroke_edges(points, edges, width):
     points = np.asarray(points, dtype=np.float32)
     a, b = points[edges[:, 0]], points[edges[:, 1]]
     delta = b - a
-    length = np.linalg.norm(delta, axis=1)
+    length = np.hypot(delta[:, 0], delta[:, 1])
     keep = length > 1e-6
-    a, b, delta, length = a[keep], b[keep], delta[keep], length[keep]
-    normal = np.column_stack((-delta[:, 1], delta[:, 0])) * (width/2 / length[:, None])
-    return np.stack((a+normal, a-normal, b+normal, b+normal, a-normal, b-normal), axis=1).reshape(-1, 2).copy()
+    return segment_quads(a[keep], b[keep], delta[keep], length[keep], width)
 
 
 BEAM_VERTEX =np.dtype([('x','<f4'),('y','<f4'),('r','u1'),('g','u1'),('b','u1'),('a','u1')])
@@ -76,12 +85,18 @@ def beam_energy(lengths):
 def beam_triangles(points, width, rgb, opacity, strength):
     """Stroke with per-segment premultiplied colour for Qt's ColoredPoint2D layout."""
     points = np.asarray(points, dtype=np.float32)
-    vertices = stroke_triangles(points, width)
+    if len(points) < 2:
+        return np.empty(0, dtype=BEAM_VERTEX)
+    a, b = points[:-1], points[1:]
+    delta = b - a
+    lengths = np.hypot(delta[:, 0], delta[:, 1])
+    keep = lengths > 1e-6
+    kept_lengths = lengths[keep]
+    if not len(kept_lengths):
+        return np.empty(0, dtype=BEAM_VERTEX)
+    vertices = segment_quads(a[keep], b[keep], delta[keep], kept_lengths, width)
     result = np.empty(len(vertices), dtype=BEAM_VERTEX)
-    if not len(vertices):
-        return result
-    lengths = np.linalg.norm(points[1:]-points[:-1], axis=1)
-    alpha = opacity*((1-strength)+strength*beam_energy(lengths[lengths > 1e-6]))
+    alpha = opacity*((1-strength)+strength*beam_energy(kept_lengths))
     alpha = np.repeat(alpha, 6)
     result['x'], result['y'] = vertices[:, 0], vertices[:, 1]
     for name, channel in zip('rgb', rgb):
@@ -104,3 +119,35 @@ def grid_lines(width, height, divisions):
         for position in positions[(positions>1e-7)&(positions<extent-1e-7)]:
             lines.append([(position,0),(position,other)] if vertical else [(0,position),(other,position)])
     return lines
+
+
+def graticule_lines(width, height, divisions):
+    """Tektronix-style oscilloscope graticule: major divisions, emphasized center crosshairs,
+    5 minor subdivision ticks per major division along both center axes, and outer frame border.
+    Returns (major_lines, accent_lines).
+    """
+    major = grid_lines(width, height, divisions)
+    spacing = min(width, height) / divisions
+    if spacing <= 0 or width <= 2 or height <= 2:
+        return major, []
+    cx, cy = width / 2.0, height / 2.0
+    accent = [
+        [(cx, 0.0), (cx, height)],
+        [(0.0, cy), (width, cy)],
+        [(1.0, 1.0), (width - 1.0, 1.0)],
+        [(width - 1.0, 1.0), (width - 1.0, height - 1.0)],
+        [(width - 1.0, height - 1.0), (1.0, height - 1.0)],
+        [(1.0, height - 1.0), (1.0, 1.0)],
+    ]
+    tick = max(3.0, min(6.0, spacing * 0.08))
+    sub = spacing / 5.0
+    if sub >= 4.0:
+        nx = int(np.ceil(width / (2.0 * sub)))
+        xs = cx + np.arange(-nx, nx + 1) * sub
+        for x in xs[(xs > 2.0) & (xs < width - 2.0)]:
+            accent.append([(float(x), cy - tick), (float(x), cy + tick)])
+        ny = int(np.ceil(height / (2.0 * sub)))
+        ys = cy + np.arange(-ny, ny + 1) * sub
+        for y in ys[(ys > 2.0) & (ys < height - 2.0)]:
+            accent.append([(cx - tick, float(y)), (cx + tick, float(y))])
+    return major, accent

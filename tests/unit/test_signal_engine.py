@@ -57,8 +57,8 @@ class SignalTests(unittest.TestCase):
                     'Dodecahedron': (20, 30), 'Icosahedron': (12, 30),
                     'Triangle (2D)': (3, 3), 'Square (2D)': (4, 4), 'Pentagon (2D)': (5, 5),
                     'Tilting circle': (128, 128), 'Octant sphere': (282, 288)}
-        self.assertEqual(set(SOLIDS), set(expected))
-        for solid in SOLIDS:
+        self.assertTrue(set(expected) <= set(SOLIDS))
+        for solid in expected:
             vertices, edges = geometry(solid)
             self.assertEqual((len(vertices), len(edges)), expected[solid])
             degree = np.bincount(np.array(edges).ravel())

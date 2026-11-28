@@ -15,7 +15,8 @@ from PySide6.QtWidgets import (QColorDialog, QDoubleSpinBox, QGridLayout, QLabel
 from phosphor.display import theme as themes
 from phosphor.editor.layout_metrics import SPIN_MIN
 from phosphor.editor.panel_widgets import FlowRow
-from phosphor.display.phosphor import PROFILE_RANGES, afterglow_level_at, decay_preview
+from phosphor.display.phosphor import (DEFAULT_GRAPHICS_QUALITY, PHOSPHOR_CUSTOM, PROFILE_RANGES,
+                                      afterglow_level_at, decay_preview)
 from phosphor.editor.paint_guard import guarded_paint
 
 T_MIN, T_MAX = 1e-3, 5.
@@ -48,8 +49,9 @@ class DecayPlot(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
 
-    def set_profile(self, profile, intensity):
+    def set_profile(self, profile, intensity, quality, name):
         self.profile, self.intensity = dict(profile), intensity
+        self.quality, self.name = quality, name
         self.update()
 
     def plot_rect(self):
@@ -62,10 +64,10 @@ class DecayPlot(QWidget):
     def handles(self):
         """Flash and afterglow points, each on its own curve at its decay time."""
         p = self.profile
-        flash, _, _ = decay_preview(p, self.intensity, [p['flash_time']])
-        _, afterglow, _ = decay_preview(p, self.intensity, [p['afterglow_time']])
+        flash, afterglow, _ = decay_preview(p, self.intensity, [p['flash_time'], p['afterglow_time']],
+                                            self.quality, self.name)
         return dict(flash=self.to_point(p['flash_time'], flash[0]),
-                    afterglow=self.to_point(p['afterglow_time'], afterglow[0]))
+                    afterglow=self.to_point(p['afterglow_time'], afterglow[1]))
 
     @guarded_paint
     def paintEvent(self, event):
@@ -82,6 +84,7 @@ class DecayPlot(QWidget):
         fonts = style.fonts
         font = painter.font()
         modern = style.style == themes.MODERN
+        vintage = style.style == themes.VINTAGE
         if modern:
             font.setPixelSize(fonts.timeline_small_px)
         else:
@@ -101,7 +104,7 @@ class DecayPlot(QWidget):
             return
         columns = max(2, int(r.width()))
         times = time_at(np.linspace(0, 1, columns))
-        flash, afterglow, light = decay_preview(self.profile, self.intensity, times)
+        flash, afterglow, light = decay_preview(self.profile, self.intensity, times, self.quality, self.name)
         brightness = light.max(axis=1)
         # Fill each column with the emitted colour at that moment, at full saturation.
         step = r.width()/(columns-1)
@@ -119,7 +122,7 @@ class DecayPlot(QWidget):
             for x, value in zip(xs[1:], values[1:]):
                 path.lineTo(QPointF(x, r.bottom()-value*r.height()))
             color = QColor(self.profile[key]) if key else QColor(theme['fg'])
-            if modern and key and themes.needs_under_stroke(color.name(), theme['field']):
+            if (modern or vintage) and key and themes.needs_under_stroke(color.name(), theme['field']):
                 # Keep the chosen phosphor colour visible (P31 green, yellow or white on the light
                 # field): WCAG luminance contrast, not HSL lightness, decides. Classic never does this.
                 painter.setPen(QPen(QColor(theme['fg']), 3, style))
@@ -157,7 +160,8 @@ class DecayPlot(QWidget):
         profile[key] = min(high, max(low, time_at(fraction)))
         if self.drag == 'afterglow':
             brightness = (r.bottom()-event.position().y())/r.height()
-            profile['afterglow_level'] = afterglow_level_at(profile, self.intensity, brightness)
+            # Editing switches to Custom, whose afterglow has no P7 cascade.
+            profile['afterglow_level'] = afterglow_level_at(profile, self.intensity, brightness, self.quality)
         self.profile = profile
         self.update()
         self.edited.emit(dict(profile))
@@ -214,7 +218,7 @@ class PhosphorEditor(QWidget):
         self.plot.theme = theme
         self.plot.update()
 
-    def set_profile(self, profile, intensity, enabled=True):
+    def set_profile(self, profile, intensity, enabled=True, quality=DEFAULT_GRAPHICS_QUALITY, name=PHOSPHOR_CUSTOM):
         self.profile = dict(profile)
         self.syncing = True
         try:
@@ -224,7 +228,7 @@ class PhosphorEditor(QWidget):
                 button.setIcon(swatch(profile[key]))
         finally:
             self.syncing = False
-        self.plot.set_profile(profile, intensity)
+        self.plot.set_profile(profile, intensity, quality, name)
         self.setEnabled(enabled)
 
     def change(self, **values):

@@ -24,14 +24,15 @@ DIST = BUILD/'dist'
 APP = DIST/'phosphor'
 DEPENDENCIES = [HERE/name for name in ('.qt-deps', '.audio-deps') if (HERE/name).is_dir()]
 
-# Qt modules the app never loads (its only QML import is QtQuick). The PySide6 hook
-# bundles every QML plugin regardless, which costs well over 100 MB.
+# Qt modules the app never loads (its QML imports are QtQuick and, for the 3D lab bench,
+# QtQuick3D). The PySide6 hook bundles every QML plugin regardless, which costs well over 100 MB.
 UNUSED_QT = ('Qt63D', 'Qt6Charts', 'Qt6DataVisualization', 'Qt6Graphs', 'Qt6Location', 'Qt6Multimedia',
-             'Qt6Pdf', 'Qt6Positioning', 'Qt6Quick3D', 'Qt6RemoteObjects', 'Qt6Scxml', 'Qt6Sensors',
+             'Qt6Pdf', 'Qt6Positioning', 'Qt6RemoteObjects', 'Qt6Scxml', 'Qt6Sensors',
              'Qt6SpatialAudio', 'Qt6TextToSpeech', 'Qt6VirtualKeyboard', 'Qt6WebChannel', 'Qt6WebEngine',
              'Qt6WebSockets', 'Qt6WebView', 'Qt6QuickTest', 'Qt6Test', 'Qt6Sql')
 ESSENTIAL = ('Qt6Core', 'Qt6Gui', 'Qt6Widgets', 'Qt6Qml', 'Qt6Quick', 'Qt6Svg', 'QtCore', 'QtGui',
-             'QtWidgets', 'QtQml', 'QtQuick', 'qwindows', 'qtquick2plugin')
+             'QtWidgets', 'QtQml', 'QtQuick', 'qwindows', 'qtquick2plugin',
+             'Qt6Quick3D', 'Qt6Quick3DRuntimeRender', 'Qt6Quick3DHelpers', 'qquick3dplugin')
 
 
 def run(*command, **options):
@@ -116,6 +117,10 @@ def build():
         '--paths', HERE, '--add-data', f'{HERE/"phosphor"/"assets"};phosphor/assets',
         '--add-data', f'{HERE/"docs"/"manual"};docs/manual',
         '--add-data', f'{HERE/"docs"/"MACOS_DEVELOPMENT.md"};docs',
+        # The 3D lab bench loads its scene and shaders from beside its modules.
+        '--add-data', f'{HERE/"phosphor"/"editor"/"desk3d.qml"};phosphor/editor',
+        '--add-data', f'{HERE/"phosphor"/"editor"/"shaders"};phosphor/editor/shaders',
+        '--add-data', f'{HERE/"phosphor"/"raytrace"/"shaders"};phosphor/raytrace/shaders',
         # mido picks its backend by name at runtime.
         '--hidden-import', 'mido.backends.rtmidi',
         '--hidden-import', 'numba',

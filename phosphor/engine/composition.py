@@ -452,9 +452,10 @@ class ChordVoices:
     steal: np.ndarray
     partner: np.ndarray
     dropped: tuple
+    max_end: np.ndarray | None = None
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=16)
 def chord_voices(notes):
     """Allocate beat-domain segments; muted partners retain their own trajectories."""
     events = {}
@@ -495,8 +496,10 @@ def chord_voices(notes):
     rows = sorted((r for r in rows if r[1] > r[0]), key=lambda r: (r[0], r[2], r[4]))
     arrays = tuple(np.array([r[k] for r in rows], dtype=int if k in (4, 6) else float)
                    for k in range(7))
-    for a in arrays: a.setflags(write=False)
-    return ChordVoices(*arrays, tuple(dropped))
+    active_end = np.minimum(arrays[1], arrays[5])
+    max_end = np.maximum.accumulate(active_end) if len(active_end) else active_end
+    for a in (*arrays, max_end): a.setflags(write=False)
+    return ChordVoices(*arrays, tuple(dropped), max_end)
 
 
 class _ChordLane(NoteSource):
@@ -676,7 +679,8 @@ def _baked_settings(key, bpm, tempo_key, sample_rate, route_mode, corner_dwell_u
 
     def bake_shape(shape):
         lanes = live_lanes(shape.lanes)  # Parked variable lanes (object Replace) are never baked.
-        automated = (lanes or shape.path_start.points or shape.path_trace.points or
+        matrix_auto = shape.matrix is not None and (shape.matrix.text_speed.points or shape.matrix.fall_speed.points)
+        automated = (lanes or shape.path_start.points or shape.path_trace.points or matrix_auto or
                      any(p.points for step in shape.transforms for p in (*step.params, step.on)) or
                      any(plot is not None and any(v.points for v in plot.variables)
                          for plot in (shape.plot, shape.recurrence)) or
@@ -690,10 +694,13 @@ def _baked_settings(key, bpm, tempo_key, sample_rate, route_mode, corner_dwell_u
         recurrence = shape.recurrence
         if recurrence is not None and any(v.points for v in recurrence.variables):
             recurrence = replace(recurrence, variables=tuple(bake(v) for v in recurrence.variables))
+        matrix = shape.matrix
+        if matrix_auto:
+            matrix = replace(matrix, text_speed=bake(matrix.text_speed), fall_speed=bake(matrix.fall_speed))
         variables = (tuple(bake(v) for v in shape.transform_variables)  # Object variables (T5).
                      if any(v.points for v in shape.transform_variables) else shape.transform_variables)
         return replace(shape, transforms=transforms, path_start=bake(shape.path_start),
-                       path_trace=bake(shape.path_trace), plot=plot, recurrence=recurrence,
+                       path_trace=bake(shape.path_trace), plot=plot, recurrence=recurrence, matrix=matrix,
                        transform_variables=variables, lane_clock=clock if lanes else shape.lane_clock)
 
     return replace(clip.settings, shapes=tuple(bake_shape(s) for s in clip.settings.shapes),
@@ -933,6 +940,13 @@ def duplicate_clip(project, index, start):
     clips = tuple(sorted((*project.clips, copy), key=lambda c: c.start))
     result = validate_project(replace(project, clips=clips))
     return result, next(i for i, c in enumerate(clips) if c is copy)
+
+
+def duplicated_clip_named(project, index, start):
+    """duplicate_clip, with the copy named '<name> copy' (the Duplicate selected clip template)."""
+    result, copied = duplicate_clip(project, index, start)
+    clip = result.clips[copied]
+    return validate_project(with_clip(result, copied, replace(clip, name=(clip.name + ' copy')[:48]))), copied
 
 
 def with_clip(project, index, clip):

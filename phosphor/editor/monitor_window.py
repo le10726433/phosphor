@@ -132,12 +132,12 @@ def _load_qt_classes():
         def set_theme(self, theme):
             self.theme = theme
             colors = theme.colors
-            modern = theme.style == themes.MODERN
-            self._foreground = QColor(colors['overlay_fore' if modern else 'fg'])
-            self._hover_foreground = QColor(colors['selection_text']) if modern else self._foreground
-            self._background = QColor(colors['overlay_back' if modern else 'bg'])
+            styled = theme.style in (themes.MODERN, themes.VINTAGE)
+            self._foreground = QColor(colors['overlay_fore' if styled else 'fg'])
+            self._hover_foreground = QColor(colors['selection_text']) if styled else self._foreground
+            self._background = QColor(colors['overlay_back' if styled else 'bg'])
             self._background.setAlpha(theme.metrics.corner_alpha)
-            self._accent = QColor(colors['overlay_accent' if modern else 'accent'])
+            self._accent = QColor(colors['overlay_accent' if styled else 'accent'])
             self._accent.setAlpha(theme.metrics.corner_alpha)
             self.update()
 

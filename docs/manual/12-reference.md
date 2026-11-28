@@ -16,11 +16,21 @@ phosphor keeps them, a glossary, and troubleshooting. Composer's own gesture tab
 | Redo (Composer and Sandbox; shape builder keeps its own history) | ⇧⌘Z | Ctrl+Y or Ctrl+Shift+Z |
 | Full screen (the app window) | ⌃⌘F | F11 |
 | Trace only | ⇧⌘F | Ctrl+Shift+F |
+| 3D Lab Bench | ⌃⌘3 | Ctrl+Shift+3 |
 | Leave full screen, Trace only or the full-screen trace | Escape | Escape |
 | Play / Stop (Composer and Sandbox) | Space | Space |
 | Go to start / loop start | Home | Home |
 | Stop at song end (Composer) | End | End |
 | Zoom to song (Composer) | ⌘0 | Ctrl+0 |
+| Zoom to selection (Composer) | ⇧⌘0 | Ctrl+Shift+0 |
+| Show or hide Library | ⌘B | Ctrl+B |
+| Toggle Input panel | ⌘1 | Ctrl+1 |
+| Toggle Scene panel | ⌘2 | Ctrl+2 |
+| Toggle Mix panel | ⌘3 | Ctrl+3 |
+| Toggle Appearance panel | ⌘4 | Ctrl+4 |
+| Toggle Signal output panel | ⌘5 | Ctrl+5 |
+| Switch Composer / Sandbox | ⌘\ | Ctrl+\ |
+| Quick Add (search and add objects, equations, transforms, recipes) | ⌘K | Ctrl+K |
 
 These are the default keys. Change them in **Preferences › Controls › Keyboard
 shortcuts** (search, change, reset one or all, export and import; saved on this computer,
@@ -151,8 +161,8 @@ a warning with the step index.
 
 | File | What it holds |
 |---|---|
-| `*.scene.json` | A Sandbox scene: objects, transforms, equations, imported drawings and models (including baked animation), source settings, mix. Scene version 24; versions 11–24 open. Settings an object's type does not use (after **Replace**) are saved as its parked settings; an object's own variables are saved with it. |
-| `*.project.json` | A Composer project: tempo, loop, notes, every clip with its whole scene, automation and optional colour, and the audio tracks (name, gain, pan, phase and its mode, their pan and phase lanes, mute, collapse) with their audio clips, which link to their files. Project version 11; versions 1–11 open (before 10, the audio clips open on one track, **Audio 1**; before 11, tracks have no pan or phase). |
+| `*.scene.json` | A Sandbox scene: objects, transforms, equations, imported drawings and models (including baked animation), source settings, mix. Scene version 25; versions 11–25 open. Settings an object's type does not use (after **Replace**) are saved as its parked settings; an object's own variables are saved with it. |
+| `*.project.json` | A Composer project: tempo, loop, notes, every clip with its whole scene, automation and optional colour, and the audio tracks (name, gain, pan, phase and its mode, their pan and phase lanes, effects and effect lanes, mute, collapse) with their audio clips, which link to their files. Project version 12; versions 1–12 open (before 10, the audio clips open on one track, **Audio 1**; before 11, tracks have no pan or phase; before 12, no effects). |
 | `*.shape.json` | A reusable shape-builder drawing (**Save shape…** / **Load shape…**). |
 | `*.wav` | Exports: stereo, left = X, right = Y. |
 | `*.mid` | MIDI files to play (MIDI file source), import into Composer notes, export from notes, and Live MIDI recordings. |

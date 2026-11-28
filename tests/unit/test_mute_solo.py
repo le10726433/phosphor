@@ -90,6 +90,11 @@ class WindowSwitchTests(unittest.TestCase):
         self.w.show(); self.app.processEvents()
 
     def tearDown(self):
+        # QTest's modifier clicks leave Qt reporting Alt as held (no release follows), and the
+        # window reads QApplication.keyboardModifiers(): release it so later tests start clean.
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        QTest.keyRelease(self.w, Qt.Key.Key_Alt); self.app.processEvents()
         self.w.force_close = True
         self.w.shutdown_audio()
         self.w.scene.mark_saved(); self.w.project_dirty = False

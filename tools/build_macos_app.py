@@ -49,10 +49,10 @@ def make_icon():
     run('iconutil', '-c', 'icns', iconset, '-o', icon)
     return icon
 
-# Qt frameworks the app never loads (its only QML import is QtQuick). The PySide6
-# hook bundles every QML plugin regardless, which costs well over 200 MB.
+# Qt frameworks the app never loads (its QML imports are QtQuick and, for the 3D lab bench,
+# QtQuick3D). The PySide6 hook bundles every QML plugin regardless, which costs well over 200 MB.
 UNUSED_FRAMEWORKS = ('Qt3D', 'QtCharts', 'QtDataVisualization', 'QtGraphs', 'QtLocation', 'QtMultimedia',
-                     'QtPdf', 'QtPositioning', 'QtQuick3D', 'QtRemoteObjects', 'QtScxml', 'QtSensors',
+                     'QtPdf', 'QtPositioning', 'QtRemoteObjects', 'QtScxml', 'QtSensors',
                      'QtSpatialAudio', 'QtTextToSpeech', 'QtVirtualKeyboard', 'QtWebChannel', 'QtWebEngine',
                      'QtWebSockets', 'QtWebView', 'QtQuickTest', 'QtTest', 'QtSql')
 
@@ -110,6 +110,10 @@ def build(dmg=False):
         '--paths', HERE, '--add-data', f'{HERE/"phosphor"/"assets"}:phosphor/assets',
         '--add-data', f'{HERE/"docs"/"manual"}:docs/manual',
         '--add-data', f'{HERE/"docs"/"MACOS_DEVELOPMENT.md"}:docs',
+        # The 3D lab bench loads its scene and shaders from beside its modules.
+        '--add-data', f'{HERE/"phosphor"/"editor"/"desk3d.qml"}:phosphor/editor',
+        '--add-data', f'{HERE/"phosphor"/"editor"/"shaders"}:phosphor/editor/shaders',
+        '--add-data', f'{HERE/"phosphor"/"raytrace"/"shaders"}:phosphor/raytrace/shaders',
         # mido picks its backend by name at runtime.
         '--hidden-import', 'mido.backends.rtmidi',
         '--hidden-import', 'numba',

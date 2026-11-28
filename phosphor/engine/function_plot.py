@@ -348,23 +348,102 @@ def compiled_plot(plot):
 
 
 PRESETS = {
-    'Helix': FunctionPlot('0.6*cos(3*tau*s)', '0.6*sin(3*tau*s)', z='1.6*s - 0.8'),
-    'Trefoil knot': FunctionPlot('0.27*(sin(tau*s)+2*sin(2*tau*s))',
-                                 '0.27*(cos(tau*s)-2*cos(2*tau*s))', z='-0.27*sin(3*tau*s)'),
-    'Toroidal spiral': FunctionPlot('(0.6+0.2*cos(8*tau*s))*cos(tau*s)',
-                                    '(0.6+0.2*cos(8*tau*s))*sin(tau*s)', z='0.2*sin(8*tau*s)'),
+    # 2D Classics & Polar
     'Circle': FunctionPlot('sin(tau*s)', 'cos(tau*s)'),
-    'Lissajous 3:2': FunctionPlot('sin(3*tau*s + phase)', 'sin(2*tau*s)',
-                                  (Variable('phase', math.pi/2, 0., math.tau),)),
+    'Diamond': FunctionPlot('tri(s)', 'tri(s + 0.25)'),
+    'Heart': FunctionPlot('0.055*16*sin(tau*s)**3',
+                          '0.055*(13*cos(tau*s) - 5*cos(2*tau*s) - 2*cos(3*tau*s) - cos(4*tau*s))'),
     'Rose (k petals)': FunctionPlot('cos(k*tau*s)*cos(tau*s)', 'cos(k*tau*s)*sin(tau*s)',
                                     (Variable('k', 4., 1., 12.),)),
     'Spiral': FunctionPlot('s*cos(turns*tau*s)', 's*sin(turns*tau*s)',
                            (Variable('turns', 6., 1., 20.),)),
-    'Diamond': FunctionPlot('tri(s)', 'tri(s + 0.25)'),
-    'Heart': FunctionPlot('0.055*16*sin(tau*s)**3',
-                          '0.055*(13*cos(tau*s) - 5*cos(2*tau*s) - 2*cos(3*tau*s) - cos(4*tau*s))'),
+    'Superellipse (Squircle)': FunctionPlot(
+        '0.9*sign(cos(tau*s))*abs(cos(tau*s))**(2/k)',
+        '0.9*sign(sin(tau*s))*abs(sin(tau*s))**(2/k)',
+        (Variable('k', 0.67, 0.4, 12.),),
+    ),
+    'Superformula (Gielis)': FunctionPlot(
+        '0.85*(abs(cos(m*tau*s/4))**n2 + abs(sin(m*tau*s/4))**n3)**(-1/n1)*cos(tau*s)',
+        '0.85*(abs(cos(m*tau*s/4))**n2 + abs(sin(m*tau*s/4))**n3)**(-1/n1)*sin(tau*s)',
+        (Variable('m', 6., 1., 16.), Variable('n1', 1., 0.2, 10.),
+         Variable('n2', 1.7, 0.2, 10.), Variable('n3', 1.7, 0.2, 10.)),
+    ),
+    # Harmonic & Spirographs
+    'Lissajous 3:2': FunctionPlot('sin(3*tau*s + phase)', 'sin(2*tau*s)',
+                                  (Variable('phase', math.pi/2, 0., math.tau),)),
+    'Spirograph (Epitrochoid)': FunctionPlot(
+        '((k + 1)*cos(tau*s) - d*cos((k + 1)*tau*s)) / (k + 1 + abs(d))',
+        '((k + 1)*sin(tau*s) - d*sin((k + 1)*tau*s)) / (k + 1 + abs(d))',
+        (Variable('k', 5., 1., 12.), Variable('d', 1.6, 0.1, 4.)),
+    ),
+    'Hypotrochoid': FunctionPlot(
+        '((k - 1)*cos(tau*s) + d*cos((k - 1)*tau*s)) / (abs(k - 1) + abs(d) + 0.001)',
+        '((k - 1)*sin(tau*s) - d*sin((k - 1)*tau*s)) / (abs(k - 1) + abs(d) + 0.001)',
+        (Variable('k', 5., 2., 12.), Variable('d', 2.2, 0.1, 5.)),
+    ),
+    'Butterfly curve': FunctionPlot(
+        '0.22*sin(6*tau*s)*(exp(cos(6*tau*s)) - 2*cos(24*tau*s) - sin(0.5*tau*s)**5)',
+        '0.22*cos(6*tau*s)*(exp(cos(6*tau*s)) - 2*cos(24*tau*s) - sin(0.5*tau*s)**5)',
+    ),
+    # 3D Curves & Knots
+    'Helix': FunctionPlot('0.6*cos(3*tau*s)', '0.6*sin(3*tau*s)', z='1.6*s - 0.8'),
+    'Trefoil knot': FunctionPlot('0.27*(sin(tau*s)+2*sin(2*tau*s))',
+                                 '0.27*(cos(tau*s)-2*cos(2*tau*s))', z='-0.27*sin(3*tau*s)'),
+    'Torus knot (m, q)': FunctionPlot(
+        '0.3*(2 + cos(q*tau*s))*cos(m*tau*s)',
+        '0.3*(2 + cos(q*tau*s))*sin(m*tau*s)',
+        (Variable('m', 3., 1., 9.), Variable('q', 5., 1., 12.)),
+        z='-0.3*sin(q*tau*s)',
+    ),
+    'Toroidal spiral': FunctionPlot('(0.6+0.2*cos(8*tau*s))*cos(tau*s)',
+                                    '(0.6+0.2*cos(8*tau*s))*sin(tau*s)', z='0.2*sin(8*tau*s)'),
+    '3D Lemniscate (Figure-8)': FunctionPlot(
+        '0.9*sin(tau*s)',
+        '0.45*sin(2*tau*s)',
+        z='0.35*cos(tau*s)',
+    ),
+    "Viviani's curve": FunctionPlot(
+        '0.45*(1 + cos(tau*s))',
+        '0.45*sin(tau*s)',
+        z='0.9*sin(0.5*tau*s)',
+    ),
+    'Spherical loxodrome': FunctionPlot(
+        '0.9*sin(pi*s)*cos(turns*tau*s)',
+        '0.9*sin(pi*s)*sin(turns*tau*s)',
+        (Variable('turns', 8., 1., 24.),),
+        z='0.9*cos(pi*s)',
+    ),
+    'Nautilus horn': FunctionPlot(
+        '0.9*exp(k*(s - 1))*cos(turns*tau*s)',
+        '0.9*exp(k*(s - 1))*sin(turns*tau*s)',
+        (Variable('turns', 4., 1., 12.), Variable('k', 2.2, 0.5, 5.)),
+        z='0.8*(2*s - 1)',
+    ),
+    # Animated (Time-Varying)
     'Rotating ellipse': FunctionPlot('cos(tau*s)*cos(rate*tau*t) - 0.4*sin(tau*s)*sin(rate*tau*t)',
                                      'cos(tau*s)*sin(rate*tau*t) + 0.4*sin(tau*s)*cos(rate*tau*t)',
                                      (Variable('rate', .25, -2., 2.),)),
+    'FM Harmonic Ring': FunctionPlot(
+        '(0.65 + idx*0.3*sin(mod*tau*s + tau*t))*cos(tau*s)',
+        '(0.65 + idx*0.3*sin(mod*tau*s + tau*t))*sin(tau*s)',
+        (Variable('mod', 7., 1., 24.), Variable('idx', 0.8, 0., 1.5)),
+    ),
+    'Orbiting epicycle': FunctionPlot(
+        '0.55*cos(tau*s) + 0.35*cos(k*tau*s + tau*t)',
+        '0.55*sin(tau*s) + 0.35*sin(k*tau*s + tau*t)',
+        (Variable('k', 4., -12., 12.),),
+        z='0.25*sin((k - 1)*tau*s)',
+    ),
+    # Audio-Rate Synthesis
     'Stereo tones (t in seconds)': FunctionPlot('0.8*sin(tau*220*t)', '0.8*sin(tau*330*t)'),
 }
+
+PARAMETRIC_GROUPS = (
+    ('2D Classics & Polar', ('Circle', 'Diamond', 'Heart', 'Rose (k petals)', 'Spiral',
+                             'Superellipse (Squircle)', 'Superformula (Gielis)')),
+    ('Harmonic & Spirographs', ('Lissajous 3:2', 'Spirograph (Epitrochoid)', 'Hypotrochoid', 'Butterfly curve')),
+    ('3D Curves & Knots', ('Helix', 'Trefoil knot', 'Torus knot (m, q)', 'Toroidal spiral',
+                           '3D Lemniscate (Figure-8)', "Viviani's curve", 'Spherical loxodrome', 'Nautilus horn')),
+    ('Animated (Time-Varying)', ('Rotating ellipse', 'FM Harmonic Ring', 'Orbiting epicycle')),
+    ('Audio-Rate Synthesis', ('Stereo tones (t in seconds)',)),
+)

@@ -11,7 +11,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtCore import Qt
 
 from phosphor.editor import qt_app as q
-from phosphor.engine.transforms import KINDS, ROTATE, MOTION_PATH, NOISE, TRANSLATE, MAP, Param
+from phosphor.engine.transforms import KINDS, MAX_TRANSFORMS, ROTATE, MOTION_PATH, NOISE, TRANSLATE, MAP, Param
 
 q.configure_graphics(); app = QApplication([])
 w = q.Window(SimpleNamespace(scene=None, ready_file=None, workspace='Sandbox')); w.resize(1000, 700); w.show(); QTest.qWait(100)
@@ -20,13 +20,18 @@ panel = w.transform_panel
 assert w.scene.shape.transforms == () and panel.empty.isVisible() and not panel.buttons['remove'].isEnabled()
 
 # Every kind fits 1000×700 without sideways scroll while selected, and adds after the selected step.
-for kind in KINDS:
-    panel.add(kind); QTest.qWait(30)
-    assert w.scene.shape.transforms[panel.current].kind == kind and panel.editors[kind][0].isVisible()
-    assert w.panels[q.PANEL_SCENE].horizontalScrollBar().maximum() == 0, kind
-assert [t.kind for t in w.scene.shape.transforms] == list(KINDS) and panel.list.count() == len(KINDS)
-for _ in KINDS: panel.action('remove')
-assert w.scene.shape.transforms == ()
+# There are more kinds than one stack holds (MAX_TRANSFORMS), so they are checked a full stack at a time.
+for first in range(0, len(KINDS), MAX_TRANSFORMS):
+    batch = KINDS[first:first + MAX_TRANSFORMS]
+    for kind in batch:
+        panel.add(kind); QTest.qWait(30)
+        assert w.scene.shape.transforms[panel.current].kind == kind and panel.editors[kind][0].isVisible()
+        assert w.panels[q.PANEL_SCENE].horizontalScrollBar().maximum() == 0, kind
+    assert [t.kind for t in w.scene.shape.transforms] == list(batch) and panel.list.count() == len(batch)
+    if len(batch) == MAX_TRANSFORMS:  # A full stack refuses another step.
+        assert not any(action.isEnabled() for action in panel.kind_actions) and not panel.buttons['duplicate'].isEnabled()
+    for _ in batch: panel.action('remove')
+    assert w.scene.shape.transforms == ()
 
 # Static by default; Time varying swaps the slider for an expression and keeps the value.
 panel.add(ROTATE); field = panel.editors[ROTATE][1][1]

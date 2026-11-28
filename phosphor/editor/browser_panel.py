@@ -26,7 +26,7 @@ SEARCH_DELAY_MS = 250
 AUTO_DELAY_MS = 180  # Auto preview waits until the selection settles (arrow keys held).
 POLL_MS = 40
 DEFAULT_LEVEL = 70  # The preview level slider, 0–100 (a gain of 0.7).
-TABS = ('Files', 'Scenes', 'Equations', 'Transforms', 'Models')
+TABS = ('Files', 'Scenes', 'Equations', 'Transforms', 'Models', 'Objects')
 
 
 def file_urls(paths):
@@ -94,10 +94,11 @@ class LibraryPage(QWidget):
     def show_entries(self):
         words = self.filter.text().casefold().split()
         current = self.list.currentItem(); keep = current.data(PATH) if current is not None else None
-        self.list.clear(); pending = None
+        self.list.clear(); pending = None; active_heading = ''
         for label, tip, data in self.entries:
-            if data is None: pending = label; continue
-            if words and not all(word in label.casefold() for word in words): continue
+            if data is None: pending = label; active_heading = label; continue
+            haystack = f'{label} {active_heading} {tip}'.casefold()
+            if words and not all(word in haystack for word in words): continue
             if pending is not None:
                 heading = QListWidgetItem(pending); heading.setData(KIND, HEADING)
                 heading.setFlags(Qt.ItemFlag.NoItemFlags); self.list.addItem(heading); pending = None
@@ -165,14 +166,16 @@ class BrowserPanel(QWidget):
         self.build_files()
         self.scenes = LibraryPage('Recent scenes and the scenes in the Files folder. Double-click opens one in Sandbox.',
                                   'Open in Sandbox', self.open_scene)
-        self.equations = LibraryPage('Built-in and saved equation presets. Double-click adds an Equation object with it.',
+        self.equations = LibraryPage('Built-in and saved Parametric & Recurrence presets. Double-click adds an object with it.',
                                      'Add Equation object', self.add_equation)
-        self.transforms = LibraryPage('Saved steps and stacks (right-click a step › Save step… to add one). '
-                                      'Double-click inserts one into the selected object.',
+        self.transforms = LibraryPage('Built-in Recipes and saved steps/stacks (right-click a step › Save step…). '
+                                      'Double-click inserts into the selected object.',
                                       'Insert into object', self.insert_transform, self.transform_menu)
         self.models = LibraryPage('Recent models and the model files in the Files folder. Double-click imports one.',
                                   'Import…', self.import_model)
-        for name, page in zip(TABS[1:], (self.scenes, self.equations, self.transforms, self.models)):
+        self.objects = LibraryPage('Built-in 2D shapes, 3D solids, curves and generative objects. Double-click adds one.',
+                                   'Add object', self.add_object)
+        for name, page in zip(TABS[1:], (self.scenes, self.equations, self.transforms, self.models, self.objects)):
             page.setObjectName('browser_' + name.lower()); self.tabs.addTab(page, name)
         self.tabs.currentChanged.connect(lambda index: self.refresh_tab())
         self.poll = QTimer(self); self.poll.setInterval(POLL_MS); self.poll.timeout.connect(self.take_results)
@@ -501,6 +504,7 @@ class BrowserPanel(QWidget):
         elif index == 2: self.equations.set_entries(self.owner.browser_equations())
         elif index == 3: self.transforms.set_entries(self.owner.browser_transforms())
         elif index == 4: self.request_recent('model'); self.list_for('models', MODEL_TYPES)
+        elif index == 5: self.objects.set_entries(self.owner.browser_objects())
 
     def list_for(self, channel, types):
         kind = 'scene' if channel == 'scenes' else 'model'
@@ -520,6 +524,7 @@ class BrowserPanel(QWidget):
     def import_model(self, path): self.owner.browser_import_model(Path(path))
     def add_equation(self, data): self.owner.browser_add_equation(*data)
     def insert_transform(self, name): self.owner.browser_insert_transform(name)
+    def add_object(self, kind): self.owner.add_object(kind)
 
     def transform_menu(self, name):
         modes = self.owner.browser_transform_modes(name)

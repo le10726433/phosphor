@@ -9,16 +9,19 @@ import os
 from phosphor.display.crt_theme import MACOS_GRAPHITE, PALETTES
 from phosphor.engine.signal_engine import Settings, Shape, validate, scene_shapes
 from phosphor.display.trace_interpolation import INTERPOLATION_FACTORS
-from phosphor.display.phosphor import PHOSPHOR_NAMES, PHOSPHOR_P31, BEAM_GAUSSIAN, BEAM_PROFILES, DEFAULT_CUSTOM_PROFILE, validated_profile
+from phosphor.display.phosphor import (PHOSPHOR_NAMES, PHOSPHOR_P31, BEAM_GAUSSIAN, BEAM_PROFILES, DEFAULT_CUSTOM_PROFILE,
+    DEFAULT_GRAPHICS_QUALITY, GRAPHICS_QUALITIES, DEFAULT_GRID_STYLE, GRID_STYLES, validated_profile)
 from phosphor.display.glow_trail import VISUAL_DEFAULTS, VISUAL_RANGES
 from phosphor.engine.custom_shape import Drawing, CUSTOM_OBJECT, compiled
 from phosphor.engine.model_object import MODEL_OBJECT, Model, model_route
 from phosphor.engine.motion_path import Motion
 from phosphor.engine.function_plot import FunctionPlot, PARAMETRIC_OBJECT, migrate_tempo_variable
 from phosphor.engine.recurrence import RecurrencePlot, RECURRENCE_OBJECT
-from phosphor.engine.transforms import Transform, Param, migrated_pose, resting_tilt_step, used_resting_tilt, read_object_variable
+from phosphor.engine.matrix_rain import MatrixConfig, MATRIX_OBJECT
+from phosphor.engine.solids import ShapeParams, PARAMETRIC_SOLIDS, default_shape_params
+from phosphor.engine.transforms import Transform, Param, migrated_pose, resting_tilt_step, used_resting_tilt, read_object_variable, SCENE_25_TRANSFORMS
 from phosphor.engine.automation import points_document, read_points, parked_lanes
-from phosphor.engine.object_replace import parked_fields, type_field, kept_parked_lanes
+from phosphor.engine.object_replace import TYPE_FIELDS, parked_fields, type_field, kept_parked_lanes
 from phosphor.engine.scene_path import INSTANT_TRAVEL
 from phosphor.audio.score_source import MIDI_FILE_SOURCE
 
@@ -27,7 +30,7 @@ from phosphor.editor.wheel_mapping import defaults as wheel_defaults
 from phosphor.editor.layout_metrics import PANEL_DEFAULT, panel_width, BROWSER_DEFAULT, browser_width
 from phosphor.editor.scroll_mapping import DEFAULT_WHEEL_SENSITIVITY, DEFAULT_TRACKPAD_SENSITIVITY, validated_sensitivity
 PREFERENCES_PATH = USER_DIR / 'preferences.json'
-DEFAULT_PREFERENCES = dict(palette='Green monochrome', show_grid=True, grid_divisions=8, crt_scanlines=True, crt_glow=True, trace_interpolation='Off', phosphor=PHOSPHOR_P31, beam_profile=BEAM_GAUSSIAN, phosphor_custom=DEFAULT_CUSTOM_PROFILE, export_format='WAV', export_depth=16, export_rate=48000, export_range='whole', ffmpeg_path='', **VISUAL_DEFAULTS)
+DEFAULT_PREFERENCES = dict(palette='Green monochrome', show_grid=True, grid_style=DEFAULT_GRID_STYLE, grid_divisions=8, crt_scanlines=True, crt_glow=True, trace_interpolation='Off', phosphor=PHOSPHOR_P31, beam_profile=BEAM_GAUSSIAN, graphics_quality=DEFAULT_GRAPHICS_QUALITY, phosphor_custom=DEFAULT_CUSTOM_PROFILE, export_format='WAV', export_depth=16, export_rate=48000, export_range='whole', ffmpeg_path='', **VISUAL_DEFAULTS)
 DEFAULT_PREFERENCES.update(wheel_defaults())
 DEFAULT_PREFERENCES['display_rate'] = 'Match monitor'
 DEFAULT_PREFERENCES['metronome_level'] = .3
@@ -61,8 +64,11 @@ DEFAULT_PREFERENCES.update(wheel_sensitivity=DEFAULT_WHEEL_SENSITIVITY, trackpad
 # ('variable:<name>'); older scenes have none.
 # Version 24: object variables (T5) in 'transform_variables', read by the transform stack and
 # Path Start/Trace; older scenes have none.
-SCENE_VERSION = 24
-READABLE_SCENE_VERSIONS = (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
+# Version 25: Matrix rain object ('matrix'), expanded built-in solids/curves, and new transforms
+# (Quantize, Twist, Bend, Wave, Spherize, Glitch, Attractor, Subdivide, Gridify, Radial array,
+# Kaleidoscope, Echo, Pointify).
+SCENE_VERSION = 25
+READABLE_SCENE_VERSIONS = (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25)
 POSE_FIELDS = ('rotation_x', 'rotation_y', 'rotation_z', 'spin_x', 'spin_y', 'spin_z')
 GLOBAL_FIELDS = ('sample_rate', 'source', 'drawing_hz', 'bpm', 'drawing_gain', 'music_gain',
                  'scale_type', 'scale_root', 'scale_end', 'tone_frequency', 'midi_file',
@@ -104,8 +110,16 @@ def _scene_value(settings, listening_mode, midi_device, model_value):
     shapes=scene_shapes(settings)
     def shape_document(shape):
         # Geometry fields are replaced or dropped below; asdict would deep-copy them first.
-        value=asdict(replace(shape, custom=None, model=None, plot=None, recurrence=None))
+        value=asdict(replace(shape, custom=None, model=None, plot=None, recurrence=None, matrix=None, shape_params=None))
         value.pop('lane_clock')
+        value.pop('shape_params')
+        if shape.solid in PARAMETRIC_SOLIDS and shape.shape_params is not None:
+            # Replace can leave another configurable solid's edits in this shared record, so an
+            # explicit record is kept even when it equals this solid's defaults ({} then): an
+            # 8-point Star set to 5 points and replaced with Gear must come back with 5 points.
+            defaults = default_shape_params(shape.solid)
+            value['shape_params'] = {key: item for key, item in shape.shape_params.document().items()
+                                     if item != getattr(defaults, key)}
         for key in ('muted', 'stack_bypassed'):
             if not getattr(shape, key): value.pop(key)
         from phosphor.engine.model_animation import Playback
@@ -121,6 +135,8 @@ def _scene_value(settings, listening_mode, midi_device, model_value):
         else:value.pop('plot')
         if shape.solid==RECURRENCE_OBJECT:value['recurrence']=shape.recurrence.document()
         else:value.pop('recurrence')
+        if shape.solid==MATRIX_OBJECT:value['matrix']=shape.matrix.document()
+        else:value.pop('matrix')
         if not shape.uid:value.pop('uid')
         for key in POSE_FIELDS:  # Kept only when code set them; the editor uses the stack.
             if value[key]==0:value.pop(key)
@@ -189,9 +205,10 @@ def scene_from_document(data, path=None, notices=None):
             if 'parked' in value:
                 parked = value.pop('parked')
                 if data['version'] < 23: raise ValueError('Parked object data requires scene version 23.')
-                fields = ('text', 'custom', 'model', 'plot', 'recurrence')
-                if not isinstance(parked, dict) or not parked or not set(parked) <= set(fields):
+                if not isinstance(parked, dict) or not parked or not set(parked) <= set(TYPE_FIELDS):
                     raise ValueError('Invalid parked object data.')
+                if 'matrix' in parked and data['version'] < 25:
+                    raise ValueError('Matrix objects require scene version 25.')
                 if type_field(value.get('solid', Shape().solid)) in parked or any(field in value for field in parked):
                     raise ValueError("Parked object data repeats the object's own type data.")
                 value.update(parked)
@@ -221,10 +238,20 @@ def scene_from_document(data, path=None, notices=None):
             if 'recurrence' in value:
                 if data['version'] < 16: raise ValueError('Recurrences require scene version 16.')
                 value['recurrence'] = RecurrencePlot.read(value['recurrence'])
+            if 'matrix' in value:
+                if data['version'] < 25: raise ValueError('Matrix objects require scene version 25.')
+                names = tuple(v.name for v in value.get('transform_variables', ()))
+                own = value.get('solid', Shape().solid) == MATRIX_OBJECT  # Else parked (object Replace).
+                value['matrix'] = MatrixConfig.read(value['matrix'], names if own else None)
+            if 'shape_params' in value:
+                if data['version'] < 25: raise ValueError('Shape parameters require scene version 25.')
+                value['shape_params'] = ShapeParams.read(value['shape_params'], value.get('solid'))
             if 'transforms' in value:
                 if data['version']<12 or not isinstance(value['transforms'],list):raise ValueError('Invalid object transforms.')
                 def read_transform(item):
                     from phosphor.engine.transforms import NOISE, OLD_NOISE, MAP
+                    if isinstance(item, dict) and item.get('kind') in SCENE_25_TRANSFORMS and data['version'] < 25:
+                        raise ValueError(f'{item.get("kind")} requires scene version 25.')
                     if isinstance(item, dict) and item.get('kind') == MAP and data['version'] < 22:
                         raise ValueError('Map requires scene version 22.')
                     if isinstance(item, dict) and 'on' in item and data['version'] < 21:
@@ -322,6 +349,10 @@ def validated_preferences(value):
     value = dict(value, phosphor_custom=validated_profile(value['phosphor_custom']))
     if not isinstance(value['beam_profile'],str) or value['beam_profile'] not in BEAM_PROFILES:
         raise ValueError('Select a beam profile.')
+    if not isinstance(value['graphics_quality'], str) or value['graphics_quality'] not in GRAPHICS_QUALITIES:
+        value['graphics_quality'] = DEFAULT_GRAPHICS_QUALITY
+    if not isinstance(value['grid_style'], str) or value['grid_style'] not in GRID_STYLES:
+        value['grid_style'] = DEFAULT_GRID_STYLE
     for key,(low,high) in VISUAL_RANGES.items():
         if type(value[key]) not in (int,float) or not math.isfinite(value[key]) or not low <= value[key] <= high:
             raise ValueError(f'{key.replace("_"," ")} must be between {low} and {high}.')

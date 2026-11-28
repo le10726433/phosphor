@@ -192,5 +192,36 @@ class ModernThemeTests(unittest.TestCase):
         self.assertEqual(themes.theme_for('Classic', 'Cyan', 'Light'), themes.theme_for('Classic', 'Cyan'))
 
 
+class VintageThemeTests(unittest.TestCase):
+    def test_palette_scope_and_contrast(self):
+        for name, palette in PALETTES.items():
+            with self.subTest(preset=name):
+                t = themes.theme_for('Vintage', name)
+                self.assertEqual(t.style, themes.VINTAGE)
+                self.assertEqual(t.mode, '')
+                self.assertEqual(set(t.colors), set(themes.theme_for('Classic', name).colors))
+                for key in ('trace', 'background'):
+                    self.assertEqual(t.color(key), palette[key])
+                for front, back in (('fg', 'bg'), ('fg', 'field'), ('selection_text', 'selection'),
+                                    ('muted', 'bg'), ('muted', 'field'), ('accent_text', 'bg')):
+                    self.assertGreaterEqual(themes.contrast_ratio(t.color(front), t.color(back)), 4.5, (front, back))
+                timeline = t.timeline_colors()
+                for front, back in ((timeline['text'], timeline['background']),
+                                    (timeline['text'], timeline['grid']),
+                                    (timeline['accent_text'], timeline['background']),
+                                    (timeline['accent_text'], timeline['grid'])):
+                    self.assertGreaterEqual(themes.contrast_ratio(front, back), 4.5, (front, back))
+
+    def test_stylesheet_has_hardware_3d_rules(self):
+        t = themes.theme_for('Vintage', 'Green monochrome')
+        sheet = t.stylesheet(MODERN_IMAGES)
+        self.assertIn('qradialgradient', sheet)
+        self.assertIn('QLabel#composer_position', sheet)
+        self.assertIn('QComboBox QAbstractItemView::item', sheet)
+        self.assertIn('QListWidget[customRows="true"]::item', sheet)
+        # Ignores mode argument (single fixed look).
+        self.assertEqual(themes.theme_for('Vintage', 'Amber', 'Light'), themes.theme_for('Vintage', 'Amber', 'Dark'))
+
+
 if __name__ == '__main__':
     unittest.main()

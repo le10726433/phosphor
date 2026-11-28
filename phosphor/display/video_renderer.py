@@ -44,6 +44,8 @@ class VideoRenderer:
         self.view.setRenderTarget(QQuickRenderTarget.fromRhiRenderTarget(self.target))
         scope = self.scope; scope.colors = PALETTES[preferences['palette']]
         scope.show_grid = preferences['show_grid']; scope.divisions = preferences['grid_divisions']
+        scope.grid_style = preferences.get('grid_style', 'Graticule')
+        scope.graphics_quality = preferences.get('graphics_quality', 'High')
         scope.scanlines = preferences['crt_scanlines']; scope.glow = preferences['crt_glow']
         for key in ('trace_thickness', 'glow_size', 'glow_intensity', 'glow_decay', 'beam_brightness'):
             setattr(scope, key, preferences[key])

@@ -84,7 +84,7 @@ from phosphor.engine import note_tools
 from phosphor.engine.chord_names import chord_name, sounding_pitches
 from phosphor.engine.composition import chord_voices
 from phosphor.engine.composition import add_marker, move_marker, rename_marker, delete_marker
-from phosphor.engine.lane_access import shift_clip_lanes, blocks, block_of, get_points, set_points, label as lane_label, static_value, default_points, is_switch, is_parked
+from phosphor.engine.lane_access import shift_clip_lanes, blocks, block_of, automatable, get_points, set_points, label as lane_label, static_value, default_points, is_switch, is_parked
 from phosphor.engine import switch_lane
 from phosphor.editor.paint_guard import guarded_paint
 from phosphor.editor.lane_strip import LaneStrip, LaneItem, BARS, BLOCKS, LINE, LANE_HEIGHT
@@ -231,6 +231,51 @@ ROUTING_LABELS = {'stereo': 'Stereo (left → X, right → Y)', 'mono': 'Mono �
                   'x': 'Mono → X only', 'y': 'Mono → Y only'}
 ROLL_TIPS = {'notes': 'Note roll', 'transforms': "Transform roll: the selected clip's automation"}
 
+# Pre-populated Scene Clip templates for Composer (Add clip ▾ menu & empty Scene Track right-click).
+CLIP_TEMPLATES = (
+    ('Quick', (
+        ('Empty clip', 'empty'),
+        ('Duplicate selected clip', 'duplicate'),
+    )),
+    ('3D Solids (Turntable)', (
+        ('Cube (3D spin)', 'solid:Cube'),
+        ('Torus (3D spin)', 'solid:Torus'),
+        ('Geodesic sphere (3D spin)', 'solid:Geodesic sphere'),
+        ('Hypercube / Tesseract (3D spin)', 'solid:Hypercube (Tesseract)'),
+    )),
+    ('Animated 2D & Generative', (
+        ('Radar reticle (sweeping)', 'anim:Radar reticle'),
+        ('Clock face (moving hands)', 'anim:Clock face'),
+        ('Matrix rain', 'anim:Matrix'),
+    )),
+    ('Parametric Equations', (
+        ('Helix (3D spin)', 'param:Helix'),
+        ('Torus knot (3D spin)', 'param:Torus knot (m, q)'),
+        ('Lissajous 3:2', 'param:Lissajous 3:2'),
+        ('FM Harmonic Ring', 'param:FM Harmonic Ring'),
+        ('Superformula (Gielis)', 'param:Superformula (Gielis)'),
+    )),
+    ('Recurrence Attractors', (
+        ('Lorenz attractor (3D spin)', 'rec:Lorenz attractor'),
+        ('Aizawa attractor (3D spin)', 'rec:Aizawa attractor'),
+        ('Clifford attractor', 'rec:Clifford attractor'),
+        ('Damped harmonograph', 'rec:Damped harmonograph'),
+    )),
+)
+
+
+def populate_clip_template_menu(menu, trigger):
+    """Add grouped Clip Template actions to `menu`; clicking calls `trigger(template_id)`."""
+    for idx, (group_title, items) in enumerate(CLIP_TEMPLATES):
+        if idx == 0:
+            for label, tid in items:
+                menu.addAction(label, lambda _=False, t=tid: trigger(t))
+            menu.addSeparator()
+        else:
+            sub = QMenu(group_title, menu); menu.addMenu(sub)
+            for label, tid in items:
+                sub.addAction(label, lambda _=False, t=tid: trigger(t))
+
 
 @dataclass(frozen=True)
 class TrackRow:
@@ -336,6 +381,8 @@ class TimelineView(QWidget):
     track_effects_requested = Signal(int)
     track_selected = Signal(int)  # Explicit header selection, independent of structural edits.
     shown_lane_changed = Signal()
+    automate_requested = Signal(object, bool)  # Lane key, on: from Transform Roll '+ ◆' picker.
+    clip_template_requested = Signal(str, float)  # Template id, beat (-1.0 appends at end).
 
     def __init__(self):
         super().__init__()
@@ -414,6 +461,12 @@ class TimelineView(QWidget):
         self.roll_chords.setCheckable(True); self.roll_chords.setFixedSize(54, 18)
         self.roll_chords.setToolTip('Chords: play overlapping notes as chords (Transport › Chords)')
         self.roll_chords.clicked.connect(lambda checked: self.chords_requested.emit(checked))
+        self.roll_automate = QToolButton(self)
+        self.roll_automate.setText('+ ◆'); self.roll_automate.setObjectName('roll_automate')
+        self.roll_automate.setFixedSize(54, 18)
+        self.roll_automate.setToolTip('Automate or toggle any parameter of the selected clip directly from the Transform roll')
+        self.roll_automate.clicked.connect(self.open_automate_picker)
+        self.roll_automate.hide()
         self.roll_velocity = QToolButton(self)
         self.roll_velocity.setText('Vel'); self.roll_velocity.setObjectName('roll_velocity')
         self.roll_velocity.setCheckable(True); self.roll_velocity.setFixedSize(54, 18)
@@ -721,8 +774,9 @@ class TimelineView(QWidget):
 
     def set_project(self, project, selected_clip):
         if project is not self.project: self.clip_picks = set()  # Indices name other clips after an outside edit.
-        old = self.project
+        old, old_clip = self.project, self.selected_clip
         previous_lanes = self.effect_lanes
+        solos = (self.audio_solos, self.audio_track_solos)
         if project is not old and project is not getattr(self, '_emitted', None):
             self.track_picks, self.track_anchor = set(), None  # Undo, Redo or another project: indices may name other tracks.
         if old is None or track_layout(old) != track_layout(project):
@@ -748,7 +802,9 @@ class TimelineView(QWidget):
         self.note_selection = {i for i in self.note_selection if i < len(project.notes)}
         if self.roll_top != getattr(self, '_placed_top', None):  # Tracks added, removed or collapsed move the roll.
             self._placed_top = self.roll_top; self.place_roll_buttons()
-        self.update()
+        if project is not old or selected_clip != old_clip or solos != getattr(self, '_shown_solos', None) or self.effect_lanes != previous_lanes:
+            self._shown_solos = solos
+            self.update()
 
     def set_playhead(self, beats, *, follow=True):
         if beats == self.playhead: return  # A project edit can refresh a stationary playhead.
@@ -787,6 +843,8 @@ class TimelineView(QWidget):
             blocked = button.blockSignals(True); button.setChecked(self.roll == roll); button.blockSignals(blocked)
         self.roll_chords.move(4, self.roll_top + 28)
         self.roll_chords.setVisible(self.roll == NOTE_ROLL)
+        self.roll_automate.move(4, self.roll_top + 28)
+        self.roll_automate.setVisible(self.roll == TRANSFORM_ROLL)
         rect = self.velocity_lane_rect()
         self.roll_velocity.setVisible(rect is not None and not self.roll_velocity_collapsed)
         if rect is not None: self.roll_velocity.move(4, int(rect.top()) + 4)
@@ -1211,7 +1269,12 @@ class TimelineView(QWidget):
     def chord_layout(self):
         """chord_voices for the current notes, kept per notes tuple so repaints skip hashing every note."""
         notes = self.project.notes
-        if getattr(self, '_chord_layout', (None,))[0] is not notes: self._chord_layout = (notes, chord_voices(notes))
+        cached = getattr(self, '_chord_layout', None)
+        if cached is not None and cached[0] is notes:
+            return cached[1]
+        if cached is not None and self.drag and self.drag[0] in ('move', 'resize'):
+            return cached[1]
+        self._chord_layout = (notes, chord_voices(notes))
         return self._chord_layout[1]
 
     def dropped_voices(self):
@@ -1219,8 +1282,10 @@ class TimelineView(QWidget):
 
     def paint_dropped_voices(self, p, c):
         m = self.metrics
+        notes = self.project.notes
         for index, beat in self.dropped_voices():
-            rect = self.note_rect(self.project.notes[index], beat)
+            if index >= len(notes): continue
+            rect = self.note_rect(notes[index], beat)
             # Erase the normal note/overlap fill before drawing the faded remainder.
             p.fillRect(rect.adjusted(-1, -1, 1, 1), c['background'])
             fill = QColor(c['trace']); fill.setAlpha(m.dropped_voice_alpha)
@@ -2886,7 +2951,7 @@ class TimelineView(QWidget):
                     if index != self.selected_clip: self.selected_clip = index; self.clip_selected.emit(index)
                     position = event.globalPosition().toPoint()
                     QTimer.singleShot(0, lambda: self.clip_menu(index, position))
-                else: self.paste_menu(event.globalPosition().toPoint())
+                else: self.scene_empty_menu(self.snapped(self.beats_at(x), round), event.globalPosition().toPoint())
                 return
             if index is None: return
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier and not edge:
@@ -3528,10 +3593,65 @@ class TimelineView(QWidget):
         chosen = menu.exec(position)
         if chosen is delete: self.delete_clip(index)
 
+    def scene_empty_menu(self, beat, position):
+        menu = QMenu(self); payload = self.clipboard_payload()
+        action = menu.addAction('Paste' + (f' {clipboard.describe(payload)}' if payload else '') + ' at the playhead')
+        action.setShortcuts(key_sequences('paste')); action.setProperty('shortcut_id', 'paste'); action.setEnabled(payload is not None); action.triggered.connect(self.paste)
+        menu.addSeparator()
+        sub = QMenu('Add clip from template', menu); menu.addMenu(sub)
+        populate_clip_template_menu(sub, lambda tid, b=max(0., float(beat)): self.clip_template_requested.emit(tid, b))
+        menu.exec(position); menu.deleteLater()
+
+    def build_automate_menu(self, clip=None):
+        """Grouped menu of all automatable parameters on `clip` for the Transform Roll '+ ◆' picker."""
+        clip = self.clip if clip is None else clip
+        menu = QMenu(self)
+        if clip is None:
+            menu.addAction('No clip selected').setEnabled(False)
+            return menu
+        keys = [k for k in automatable(clip) if not is_parked(k)]
+        # Group by object index (0..N-1) and 'mix'
+        by_obj = {}
+        mix_keys = []
+        for k in keys:
+            if k[0] == 'mix':
+                mix_keys.append(k)
+            else:
+                by_obj.setdefault(k[1], []).append(k)
+        for obj_i, okeys in by_obj.items():
+            shape = clip.settings.shapes[obj_i]
+            sub = QMenu(f'{obj_i + 1:02}  {shape.solid}', menu); menu.addMenu(sub)
+            for k in okeys:
+                active = bool(get_points(clip, k))
+                full_lbl = lane_label(clip, k)
+                # Trim redundant leading shape name inside the object submenu
+                short_lbl = full_lbl.split(' › ', 1)[1] if ' › ' in full_lbl else full_lbl
+                act = sub.addAction(short_lbl)
+                act.setCheckable(True); act.setChecked(active)
+                act.setData(k)
+                act.triggered.connect(lambda _=False, key=k, on=not active: self.automate_requested.emit(key, on))
+        if mix_keys:
+            if by_obj: menu.addSeparator()
+            mix_sub = QMenu('Mix', menu); menu.addMenu(mix_sub)
+            for k in mix_keys:
+                active = bool(get_points(clip, k))
+                act = mix_sub.addAction(lane_label(clip, k))
+                act.setCheckable(True); act.setChecked(active)
+                act.setData(k)
+                act.triggered.connect(lambda _=False, key=k, on=not active: self.automate_requested.emit(key, on))
+        return menu
+
+    def open_automate_picker(self):
+        menu = self.build_automate_menu()
+        menu.exec(self.roll_automate.mapToGlobal(self.roll_automate.rect().bottomLeft()))
+        menu.deleteLater()
+
     def build_clip_menu(self, index):
         """The clip's right-click menu (built separately so smokes can inspect it)."""
         menu = QMenu(self)
         self.edit_actions(menu)
+        rename = menu.addAction('Rename clip…')
+        rename.triggered.connect(lambda _=False: self.rename_clip(index))
         split = menu.addAction('Split at playhead')
         split.setShortcuts(key_sequences('split_clip'))
         split.setEnabled(self.project.clips[index].start < self.playhead < self.project.clips[index].end)
@@ -3550,6 +3670,17 @@ class TimelineView(QWidget):
         menu.mute = mute
         delete = menu.addAction('Delete clip'); delete.setEnabled(len(self.project.clips) > 1)
         return menu, delete
+
+    def rename_clip(self, index, name=None):
+        if self.project is None or not 0 <= index < len(self.project.clips): return False
+        clip = self.project.clips[index]
+        if name is None:
+            name, ok = self.ask_text('Rename clip', 'Clip name', clip.name)
+            if not ok: return False
+        cleaned = name.strip()
+        if not cleaned or cleaned == clip.name: return False
+        self.emit(with_clip(self.project, index, replace(clip, name=cleaned[:48])))
+        return True
 
     def set_clip_muted(self, index, muted):
         self.emit(with_clip(self.project, index, replace(self.project.clips[index], muted=muted)))
@@ -3605,6 +3736,8 @@ class ComposerPanel(QWidget):
         self.record_overdub.setChecked(True)
         self.record_replace = menu.addAction('Replace'); self.record_replace.setCheckable(True); modes.addAction(self.record_replace)
         self.record_quantise = menu.addAction('Quantise to Snap'); self.record_quantise.setCheckable(True)
+        menu.addSeparator()
+        self.record_midi_menu = menu.addMenu('MIDI input')
         self.record.setMenu(menu); row.addWidget(self.record)
         row.addSpacing(8); row.addWidget(QLabel('Tempo'))
         self.bpm = QDoubleSpinBox(); self.bpm.setRange(*BPM_RANGE); self.bpm.setDecimals(1); self.bpm.setSuffix(' BPM'); self.bpm.setKeyboardTracking(False)
@@ -3642,10 +3775,20 @@ class ComposerPanel(QWidget):
         self.clip_length = QDoubleSpinBox(); self.clip_length.setRange(.25, MAX_BEATS / BEATS_PER_BAR); self.clip_length.setDecimals(2)
         self.clip_length.setSuffix(' bars'); self.clip_length.setKeyboardTracking(False); self.clip_length.setToolTip('Length of the selected clip')
         row.addWidget(self.clip_length)
-        self.add_clip = QPushButton('Add clip'); self.add_clip.setToolTip('Add an empty scene clip after the last one')
+        # One split button, like Record: a separate template button made the one-row transport
+        # wrap at 1800 px on Windows (it needed 1778 px for a 1764 px panel).
+        self.add_clip = QToolButton(); self.add_clip.setText('Add clip'); self.add_clip.setObjectName('composer_add_clip')
+        self.add_clip.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.add_clip.setToolTip('Add an empty scene clip after the last one; arrow: add one from a 3D, '
+                                 'animated 2D or equation template, or duplicate the selected clip')
+        self.add_clip.setProperty('composerTransport', True)
+        self.add_clip_template = self.add_clip  # The template menu opens from its arrow.
         self.delete_clip = QPushButton('Delete clip'); self.delete_clip.setToolTip('Delete the selected clip')
         row.addWidget(self.add_clip); row.addWidget(self.delete_clip)
         self.timeline = TimelineView(); self.timeline.setObjectName('timeline'); layout.addWidget(self.timeline, 1)
+        tpl_menu = QMenu(self.add_clip_template)
+        populate_clip_template_menu(tpl_menu, lambda tid: self.timeline.clip_template_requested.emit(tid, -1.0))
+        self.add_clip_template.setMenu(tpl_menu)
         tools_menu = QMenu(self.note_tools); self.note_tools.setMenu(tools_menu)
         def refresh_tools():
             tools_menu.clear()

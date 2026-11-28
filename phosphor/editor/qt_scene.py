@@ -84,6 +84,24 @@ class Scene:
         self.settings = replace(self.settings, shapes=tuple(shapes))
         self.selected = min(self.selected, len(shapes)-1)
 
+    def move(self, source, destination):
+        """Reorder shape at source to destination index; returns True if order changed."""
+        shapes = list(self.settings.shapes)
+        if not (0 <= source < len(shapes) and 0 <= destination < len(shapes)) or source == destination:
+            return False
+        moved = shapes.pop(source)
+        shapes.insert(destination, moved)
+        candidate = replace(self.settings, shapes=tuple(shapes))
+        validate(candidate)
+        self.settings = candidate
+        if self.selected == source:
+            self.selected = destination
+        elif source < self.selected <= destination:
+            self.selected -= 1
+        elif destination <= self.selected < source:
+            self.selected += 1
+        return True
+
     def save(self, path):
         document = self.document()
         atomic_json(path, document)

@@ -1,4 +1,5 @@
 """Display-only cubic interpolation; never used for capture or audio output."""
+import math
 import numpy as np
 
 INTERPOLATION_FACTORS = {'Off':1, 'Cubic 4x':4, 'Cubic 8x':8}
@@ -22,3 +23,16 @@ def interpolate_trace(points, mode):
     result = np.concatenate((segments.reshape(-1,2),points[-1:]))
     result[::factor] = points  # Preserve every original sample exactly.
     return result
+
+
+def interpolate_tail(points, mode, count):
+    """Exact last `count + 1` points of interpolate_trace(points, mode) without interpolating the prefix."""
+    if count <= 0 or len(points) < 2:
+        return np.empty((0, 2), dtype=np.float32)
+    factor = INTERPOLATION_FACTORS[mode]
+    if factor == 1:
+        return points[-count-1:]
+    # Each Catmull–Rom segment uses 1 sample of left context (p0); keep one extra sample before the tail.
+    segments = math.ceil(count / factor)
+    start = max(0, len(points) - 2 - segments)
+    return interpolate_trace(points[start:], mode)[-count-1:]

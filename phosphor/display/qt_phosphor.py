@@ -17,11 +17,15 @@ Item {
     anchors.fill: parent
     property real fastKeep: 0
     property real slowKeep: 0
+    property real tailKeep: 0
     property real exposure: 5
     property real afterglowGain: 0
     property real fastGain: 1
     property real slowGain: 1
+    property real frameIndex: 0
     property real stepScale: 1
+    property real idleStepScale: 0
+    property real cascadeWeight: 0
     property real shimmerScale: 1
     property vector3d fastColor: Qt.vector3d(1, 1, 1)
     property vector3d slowColor: Qt.vector3d(1, 1, 1)
@@ -42,6 +46,21 @@ Item {
     property real viewScale: 1
     property real shimmer: 0
     property real seed: 0
+    property real softSat: 0
+    property real powerLaw: 0
+    property real cascade: 0
+    property bool haloOn: false
+    property real haloGain: 0
+    property real haloTexOn: 0
+    property real haloFactor: 12
+    property real haloSigma: 6
+    property size haloSize: Qt.size(1, 1)
+    property vector2d haloTexelX: Qt.vector2d(0, 0)
+    property vector2d haloTexelY: Qt.vector2d(0, 0)
+    property real vignette: 0
+    property real linearTone: 0
+    property real edgeGraticule: 0
+    property real gridDivisions: 8
     // Video: the raster ShaderEffect from VIDEO_QML replaces the beam geometry deposit.
     property bool videoMode: false
     property var rasterItem: null
@@ -52,11 +71,13 @@ Item {
         if (gaussian) { blurredX.scheduleUpdate(); blurredY.scheduleUpdate() }
         energyCopy.scheduleUpdate(); energy.scheduleUpdate()
         if (bloomOn) { bloomDowned.scheduleUpdate(); bloomedX.scheduleUpdate(); bloomedY.scheduleUpdate() }
+        if (haloOn) { haloDowned.scheduleUpdate(); haloedX.scheduleUpdate(); haloedY.scheduleUpdate() }
     }
     function releaseSources() {
         deposited.sourceItem = null; blurredX.sourceItem = null
         blurredY.sourceItem = null; energy.sourceItem = null; energyCopy.sourceItem = null
         bloomDowned.sourceItem = null; bloomedX.sourceItem = null; bloomedY.sourceItem = null
+        haloDowned.sourceItem = null; haloedX.sourceItem = null; haloedY.sourceItem = null
     }
     // Sources stay visible but off-screen: hidden ones do not update their textures.
     // Both layers stay 8-bit: floating-point layers render empty in a multisampled
@@ -98,13 +119,20 @@ Item {
         property real packedDeposit: root.gaussian ? 1 : 0
         property real fastKeep: root.fastKeep
         property real slowKeep: root.slowKeep
+        property real tailKeep: root.tailKeep
         property real fastGain: root.fastGain
         property real slowGain: root.slowGain
+        property real frameIndex: root.frameIndex
         property real stepScale: root.stepScale
+        property real idleStepScale: root.idleStepScale
+        property real cascadeWeight: root.cascadeWeight
         property real shimmerScale: root.shimmerScale
         property real shimmer: root.shimmer
         property real seed: root.seed
         property vector2d viewSize: Qt.vector2d(root.width/root.viewScale, root.height/root.viewScale)
+        property real softSat: root.softSat
+        property real powerLaw: root.powerLaw
+        property real cascade: root.cascade
         fragmentShader: accumulateShader
     }
     // Feedback runs through a copy, not a recursive layer. Qt 6.10.3 frees a recursive
@@ -156,10 +184,45 @@ Item {
         id: bloomedY; x: -40000; width: root.width; height: root.height; sourceItem: bloomY
         textureSize: root.bloomSize; hideSource: true; live: false; smooth: true
     }
+    // High/Ultra second coarser faceplate glass halation pass, updated only while haloOn.
+    ShaderEffect {
+        id: haloDown; width: root.width; height: root.height; blending: false
+        property var energy: energy
+        property vector2d energyTexel: root.energyTexel
+        property real factor: root.haloFactor
+        fragmentShader: bloomDownShader
+    }
+    ShaderEffectSource {
+        id: haloDowned; x: -40000; width: root.width; height: root.height; sourceItem: haloDown
+        textureSize: root.haloSize; hideSource: true; live: false; smooth: false
+    }
+    ShaderEffect {
+        id: haloX; width: root.width; height: root.height; blending: false
+        property var source: haloDowned
+        property vector2d texel: root.haloTexelX
+        property real sigma: root.haloSigma
+        fragmentShader: bloomBlurShader
+    }
+    ShaderEffectSource {
+        id: haloedX; x: -40000; width: root.width; height: root.height; sourceItem: haloX
+        textureSize: root.haloSize; hideSource: true; live: false; smooth: false
+    }
+    ShaderEffect {
+        id: haloY; width: root.width; height: root.height; blending: false
+        property var source: haloedX
+        property vector2d texel: root.haloTexelY
+        property real sigma: root.haloSigma
+        fragmentShader: bloomBlurShader
+    }
+    ShaderEffectSource {
+        id: haloedY; x: -40000; width: root.width; height: root.height; sourceItem: haloY
+        textureSize: root.haloSize; hideSource: true; live: false; smooth: true
+    }
     ShaderEffect {
         anchors.fill: parent
         property var energy: energy
         property var bloom: bloomedY
+        property var halo: root.haloOn ? haloedY : bloomedY
         property real bloomGain: root.bloomOn ? root.bloomGain : 0
         property real exposure: root.exposure
         property real slowGain: root.afterglowGain
@@ -167,6 +230,13 @@ Item {
         property vector3d slowColor: root.slowColor
         property real grain: root.grain
         property vector2d viewSize: Qt.vector2d(root.width/root.viewScale, root.height/root.viewScale)
+        property real haloGain: root.haloGain
+        property real haloTexOn: root.haloOn ? root.haloTexOn : 0
+        property real vignette: root.vignette
+        property real linearTone: root.linearTone
+        property real edgeGraticule: root.edgeGraticule
+        property real viewScale: root.viewScale
+        property real gridDivisions: root.gridDivisions
         fragmentShader: displayShader
     }
 }
@@ -243,11 +313,22 @@ class DepositItem(QQuickItem):
             root.appendChildNode(node)
             self.nodes = (root, node, geometry, material)
         root, node, geometry, _ = self.nodes
-        vertices = np.concatenate(self.pending) if self.pending else np.empty(0, BEAM_VERTEX)
+        pending = self.pending
+        if len(pending) == 1:
+            vertices = pending[0]
+        elif pending:
+            vertices = np.concatenate(pending)
+        else:
+            vertices = np.empty(0, BEAM_VERTEX)
         self.pending, self.pending_vertices = [], 0
-        if geometry.vertexCount() != len(vertices):
-            geometry.allocate(len(vertices))
-        if len(vertices):
+        count = len(vertices)
+        if count == 0 and geometry.vertexCount() == 0:
+            return root
+        if geometry.vertexCount() != count:
+            geometry.allocate(count)
+        if count:
+            if not vertices.flags['C_CONTIGUOUS']:
+                vertices = np.ascontiguousarray(vertices)
             ctypes.memmove(int(geometry.vertexData()), vertices.ctypes.data, vertices.nbytes)
         # Marking only geometry leaves a node that started empty undrawn.
         node.markDirty(QSGNode.DirtyStateBit.DirtyGeometry | QSGNode.DirtyStateBit.DirtyMaterial)
@@ -278,6 +359,8 @@ class PhosphorLayer:
             raise RuntimeError('; '.join(error.toString() for error in self.component.errors()))
         self.root.setParentItem(view.contentItem())
         self.video = None
+        self._uniforms = {}
+        self._frame_index = 0
         self.set_active(False)
 
     def video_output(self):
@@ -313,9 +396,16 @@ class PhosphorLayer:
             self.root.setVisible(active)
 
     def step(self, vertices, uniforms):
+        self._frame_index = (self._frame_index + 1) % 4091
+        self.root.setProperty('frameIndex', self._frame_index)
         self.deposit.add(vertices)
+        cached = self._uniforms
         for name, value in uniforms.items():
-            if name == 'bloomSize':
+            old = cached.get(name)
+            if old == value and type(old) is type(value):
+                continue
+            cached[name] = value
+            if name in ('bloomSize', 'haloSize'):
                 self.root.setProperty(name, QSize(*value))
                 continue
             vector = {2: QVector2D, 3: QVector3D}[len(value)] if isinstance(value, tuple) else None
@@ -327,5 +417,6 @@ class PhosphorLayer:
         """Drop the effect sources' window references; ~QQuickWindow cannot order them safely."""
         if self.video is not None: QMetaObject.invokeMethod(self.video, 'release')
         QMetaObject.invokeMethod(self.root, 'releaseSources')
+        self._uniforms.clear()
         self.root.setVisible(False)
         self.root.setParentItem(None)

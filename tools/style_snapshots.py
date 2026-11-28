@@ -94,7 +94,7 @@ def manifest(folder):
         raise ValueError(f'{folder}: invalid snapshot scale {scale!r}')
     # Manifests from ST1 predate style/mode and always describe Classic, which has no mode.
     data.setdefault('style', 'Classic')
-    if data['style'] == 'Classic':
+    if data['style'] in ('Classic', 'Vintage'):
         data['mode'] = data['requested_mode'] = ''
     else:
         # mode is the resolved Dark or Light; requested_mode what was asked for (System too).
@@ -238,7 +238,7 @@ def snapshots(out, palette, folder, style='Classic', mode='Dark'):
             names = sorted(p.stem for p in out.glob('*.png'))
             if names != sorted(SURFACES):
                 raise ValueError(f'Unexpected capture surfaces: {sorted(SURFACES.symmetric_difference(names))}')
-            if style == 'Classic':
+            if style in ('Classic', 'Vintage'):
                 data = dict(surfaces=names, scale=w.devicePixelRatioF(), style=style, mode='', requested_mode='')
             else:
                 data = dict(surfaces=names, scale=w.devicePixelRatioF(), style=style,
@@ -253,7 +253,7 @@ def snapshots(out, palette, folder, style='Classic', mode='Dark'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--out'); parser.add_argument('--palette', default='Green monochrome')
-    parser.add_argument('--style', choices=('Classic', 'Modern'), default='Classic')
+    parser.add_argument('--style', choices=('Classic', 'Modern', 'Vintage'), default='Classic')
     parser.add_argument('--mode', choices=('Dark', 'Light', 'System'), default='Dark')
     parser.add_argument('--folder', help='A fixed folder for the browser (its path is shown)')
     parser.add_argument('--compare', nargs=2, metavar=('BEFORE', 'AFTER'))

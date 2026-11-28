@@ -67,7 +67,7 @@ with (tempfile.TemporaryDirectory() as folder,
         check_buttons(w.ensure_monitor_window().buttons, w.theme)
         w.resize(1100, 760); w.show(); app.processEvents()
         editor = w.appearance_editor
-        assert [editor.style_choice.itemText(i) for i in range(editor.style_choice.count())] == ['Classic', 'Modern']
+        assert [editor.style_choice.itemText(i) for i in range(editor.style_choice.count())] == ['Classic', 'Modern', 'Vintage']
         assert editor.mode_row.isHidden()
         assert w.preferences['style'] == 'Classic' and editor.values()['style'] == 'Classic'
         theme = w.theme
@@ -218,7 +218,7 @@ with (tempfile.TemporaryDirectory() as folder,
         finally:
             close_window(explicit)
         # A style this version doesn't know (from a newer one) falls back to Classic.
-        assert validated_preferences(dict(w.preferences, style='Vintage'))['style'] == 'Classic'
+        assert validated_preferences(dict(w.preferences, style='Futuristic'))['style'] == 'Classic'
     finally:
         close_window(w)
 print('Style setting passed for Classic and Modern, including live System changes through the OS signal.')

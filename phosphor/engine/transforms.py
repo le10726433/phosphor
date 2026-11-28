@@ -42,12 +42,35 @@ from phosphor.engine.switch_lane import validate_switch
 ROTATE, SPIN, TRANSLATE, SCALE, SHEAR = 'Rotate', 'Spin', 'Translate', 'Scale', 'Shear'
 MIRROR, MOTION_PATH, PERSPECTIVE, NOISE = 'Mirror', 'Motion path', 'Perspective', 'Noise'
 MAP = 'Map'
+QUANTIZE, TWIST, BEND, WAVE, SPHERIZE = 'Quantize', 'Twist', 'Bend', 'Wave', 'Spherize'
+GLITCH, ATTRACTOR = 'Glitch', 'Attractor'
+SUBDIVIDE, GRIDIFY, RADIAL_ARRAY = 'Subdivide', 'Gridify', 'Radial array'
+KALEIDOSCOPE, ECHO, POINTIFY = 'Kaleidoscope', 'Echo', 'Pointify'
 OLD_NOISE = 'White noise'
 COLOURS = ('White', 'Pink', 'Brownian', 'Custom')
 RATES = ('Sample', 'Wobble')
-KINDS = (ROTATE, SPIN, TRANSLATE, SCALE, SHEAR, MIRROR, MOTION_PATH, PERSPECTIVE, MAP, NOISE)
+KINDS = (
+    ROTATE, SPIN, TRANSLATE, SCALE, SHEAR, MIRROR, MOTION_PATH, PERSPECTIVE, MAP, NOISE,
+    TWIST, BEND, WAVE, SPHERIZE, QUANTIZE, GLITCH, ATTRACTOR,
+    SUBDIVIDE, GRIDIFY, RADIAL_ARRAY, KALEIDOSCOPE, ECHO, POINTIFY,
+)
+TRANSFORM_GROUPS = (
+    ('Spatial', (TRANSLATE, ROTATE, SCALE, SHEAR, MIRROR)),
+    ('Motion & Camera', (SPIN, MOTION_PATH, PERSPECTIVE)),
+    ('Deform', (TWIST, BEND, WAVE, SPHERIZE, ATTRACTOR)),
+    ('Multiply & Topology', (SUBDIVIDE, GRIDIFY, RADIAL_ARRAY, KALEIDOSCOPE, ECHO)),
+    ('Stylize & Custom', (POINTIFY, QUANTIZE, GLITCH, NOISE, MAP)),
+)
+DEFORM_NEEDS_SUBDIVIDE = frozenset((TWIST, BEND, WAVE, SPHERIZE, ATTRACTOR))
+TOPOLOGY_KINDS = frozenset((SUBDIVIDE, GRIDIFY, RADIAL_ARRAY, KALEIDOSCOPE, ECHO))
+SCENE_25_TRANSFORMS = frozenset((
+    QUANTIZE, TWIST, BEND, WAVE, SPHERIZE, GLITCH, ATTRACTOR,
+    SUBDIVIDE, GRIDIFY, RADIAL_ARRAY, KALEIDOSCOPE, ECHO, POINTIFY,
+))
+MAX_TOPOLOGY_VERTICES = 65536
+MAX_TOPOLOGY_ROUTE = 131072
 MAX_TRANSFORMS = 16
-EXPRESSION_NAMES = ('x', 'y', 'z')  # Plus t, p and s, which parse_expression always allows.
+EXPRESSION_NAMES = ('x', 'y', 'z', 'gx', 'gy', 'gz')  # Plus t, p and s, which parse_expression always allows.
 
 
 @dataclass(frozen=True)
@@ -83,6 +106,48 @@ FIELDS = {
             Field('detail', 'Detail (steps)', 2., 0., 64., curve=True)),
     # Translate's range; the value is unused (formula only).
     MAP: tuple(Field(axis, f"{axis.upper()}′", 0., -10., 10., formula=True) for axis in 'xyz'),
+    QUANTIZE: _axes('{} step', .1, 0., 2., curve=True),
+    TWIST: (Field('x', 'X (°/unit)', 0., -720., 720., clip=False, curve=True),
+            Field('y', 'Y (°/unit)', 90., -720., 720., clip=False, curve=True),
+            Field('z', 'Z (°/unit)', 0., -720., 720., clip=False, curve=True)),
+    BEND: (Field('x', 'X (°)', 45., -360., 360., clip=False, curve=True),
+           Field('y', 'Y (°)', 0., -360., 360., clip=False, curve=True),
+           Field('z', 'Z (°)', 0., -360., 360., clip=False, curve=True)),
+    WAVE: (Field('amplitude', 'Amplitude', .15, 0., 2., curve=True),
+           Field('frequency', 'Frequency', 2., 0., 16., curve=True),
+           Field('speed', 'Speed (Hz)', 1., -20., 20., curve=True),
+           Field('radial', 'Radial ripple', 0., 0., 1., toggle=True)),
+    SPHERIZE: (Field('amount', 'Amount', .5, -1., 2.),
+               Field('radius', 'Radius', 1., .1, 5., curve=True)),
+    GLITCH: (Field('amount', 'Shift', .15, 0., 2., curve=True),
+             Field('bands', 'Bands', 6., 1., 32., curve=True),
+             Field('rate', 'Rate (Hz)', 8., 0., 60., curve=True)),
+    ATTRACTOR: (Field('strength', 'Strength', .5, -2., 2.),
+                Field('falloff', 'Falloff', 1.5, .1, 10., curve=True),
+                Field('x', 'Focus X', 0., -5., 5., curve=True),
+                Field('y', 'Focus Y', 0., -5., 5., curve=True),
+                Field('z', 'Focus Z', 0., -5., 5., curve=True)),
+    SUBDIVIDE: (Field('pieces', 'Pieces / edge', 2., 1., 16., integer=True),),
+    GRIDIFY: (Field('count_x', 'Count X', 2., 1., 8., integer=True),
+              Field('count_y', 'Count Y', 2., 1., 8., integer=True),
+              Field('count_z', 'Count Z', 1., 1., 8., integer=True),
+              Field('spacing_x', 'Spacing X', 1.2, 0., 10., curve=True),
+              Field('spacing_y', 'Spacing Y', 1.2, 0., 10., curve=True),
+              Field('spacing_z', 'Spacing Z', 1.2, 0., 10., curve=True)),
+    RADIAL_ARRAY: (Field('count', 'Copies', 6., 1., 24., integer=True),
+                   Field('radius', 'Radius', 1., 0., 10., curve=True),
+                   Field('twist', 'Twist (°)', 0., -360., 360., clip=False),
+                   Field('spread', 'Spread (°)', 360., 0., 360., clip=False)),
+    KALEIDOSCOPE: (Field('folds', 'Folds', 6., 1., 12., integer=True),
+                   Field('angle', 'Angle (°)', 0., -180., 180., clip=False)),
+    ECHO: (Field('copies', 'Copies', 3., 1., 8., integer=True),
+           Field('scale', 'Scale step', .8, .1, 1.5),
+           Field('rotate_z', 'Rotate Z (°)', 15., -180., 180., clip=False),
+           Field('offset_x', 'Offset X', 0., -2., 2., curve=True),
+           Field('offset_y', 'Offset Y', 0., -2., 2., curve=True),
+           Field('offset_z', 'Offset Z', -.15, -2., 2., curve=True)),
+    POINTIFY: (Field('points', 'Points', 16., 2., 4096., curve=True),
+               Field('glide', 'Glide', 0., 0., .5)),
 }
 HELP = {
     ROTATE: 'Turns the object about X, then Y, then Z (fixed viewport axes).',
@@ -93,8 +158,21 @@ HELP = {
     MIRROR: 'Flips the object across the chosen axes.',
     MOTION_PATH: 'Moves the object along x(t), y(t), z(t), in its own units. Right-click a field for Static.',
     PERSPECTIVE: 'Shrinks far points: a camera at this distance looks down −Z (z toward the camera grows).',
-    MAP: 'Moves every point to new coordinates: X′, Y′, Z′ are formulas of the point before this step (x, y, z), t, p and s.',
+    MAP: 'Moves every point to new coordinates: X′, Y′, Z′ are formulas of the point before this step (x, y, z, gx, gy, gz), t, p and s.',
     NOISE: 'Adds noise: Sample = every output sample (heard as hiss); Wobble = slow drift of the shape. Colour sets its spectrum.',
+    QUANTIZE: 'Snaps coordinates to a coarse spatial grid for a stepped, bit-crushed vector look (0 = off).',
+    TWIST: 'Twists the object progressively along X, Y or Z (degrees per unit). Pair with Subdivide for curved edges.',
+    BEND: 'Curves the object along X, Y or Z into an arc. Pair with Subdivide for smooth low-poly bending.',
+    WAVE: 'Adds a travelling sinusoidal wave or radial ripple across the vertices.',
+    SPHERIZE: 'Morphs vertices smoothly toward a sphere of the given radius.',
+    GLITCH: 'Divides the object into horizontal bands and jitters slices laterally at the given rate.',
+    ATTRACTOR: 'Pulls (positive) or repels (negative) vertices toward a movable 3D focal point.',
+    SUBDIVIDE: 'Splits every drawn edge into equal pieces so later deformers (Map, Twist, Bend, Wave) can curve straight lines.',
+    GRIDIFY: 'Repeats the object in a centred X × Y × Z serpentine grid and exposes copy indices gx, gy, gz to later steps.',
+    RADIAL_ARRAY: 'Arranges copies around a circle in XY with optional twist and exposes copy index gx to later steps.',
+    KALEIDOSCOPE: 'Mirrors and rotates the object N times around the origin for mandala symmetry.',
+    ECHO: 'Repeats decaying scaled, rotated and shifted ghost copies of the object.',
+    POINTIFY: 'Sample-and-hold along the beam path: turns smooth lines into bright dots with optional Glide.',
 }
 # Motion path starts time varying, so adding one moves the object at once.
 MOTION_PRESETS = {
@@ -331,6 +409,20 @@ def active(stack):
     return tuple(transform for transform in stack if transform.enabled)
 
 
+def stack_varies_with_time(stack):
+    """Whether an outline needs a fresh pose as its clock advances."""
+    for step in active(stack):
+        if step.on.points or any(p.expression or p.points for p in step.params):
+            return True
+        if step.kind == SPIN and any(p.value for p in step.params):
+            return True
+        if step.kind in (WAVE, NOISE) and step.param('speed').value:
+            return True
+        if step.kind == GLITCH and step.param('rate').value:
+            return True
+    return False
+
+
 def has_noise(stack):
     return any(transform.kind == NOISE and transform.noise.rate == 'Sample' for transform in active(stack))
 
@@ -346,22 +438,60 @@ def uses_position(stack, names=()):
                    for param in transform.params) for transform in active(stack))
 
 
-def _value(field, param, t, points, s, label, tempo=120., values=None):
-    """values: {name: value} of the object's variables at t (variable_values), or None."""
-    if not param.expression and not param.points: return float(param.value)
+_BASE_NAMESPACE = {'__builtins__': {}, **FUNCTIONS, **CONSTANTS, **_HELPERS}
+_PROBE_POINT = np.zeros((1, 3))
+
+
+def _clean_scalar(value, field):
+    if math.isnan(value): value = 0.
+    elif math.isinf(value): value = 0. if field.formula else (field.high if value > 0 else field.low)
+    if field.clip:
+        if value < field.low: value = field.low
+        elif value > field.high: value = field.high
+    return value
+
+
+def _expr_namespace(t, points, s, tempo, values, t_arr=None, p_arr=None, s_arr=None, grid_indices=None):
     count = len(points)
-    namespace = {'__builtins__': {}, **FUNCTIONS, **CONSTANTS, **_HELPERS, **(values or {}),
-                 't': np.full(count, float(t)), 'p': np.full(count, tempo.beats(float(t)) if hasattr(tempo, 'beats') else float(t) * tempo / 60.), 's': np.zeros(count) if s is None else s,
-                 'x': points[:, 0], 'y': points[:, 1], 'z': points[:, 2]}
-    names = tuple(values) if values else ()
+    ns = dict(_BASE_NAMESPACE)
+    if values: ns.update(values)
+    ns['t'] = np.full(count, float(t)) if t_arr is None else t_arr
+    if p_arr is None:
+        beats = tempo.beats(float(t)) if hasattr(tempo, 'beats') else float(t) * tempo / 60.
+        p_arr = np.full(count, beats)
+    ns['p'] = p_arr
+    ns['s'] = (np.zeros(count) if s is None else s) if s_arr is None else s_arr
+    ns['x'] = points[:, 0]; ns['y'] = points[:, 1]; ns['z'] = points[:, 2]
+    if grid_indices is None:
+        zeros = np.zeros(count)
+        ns['gx'] = zeros; ns['gy'] = zeros; ns['gz'] = zeros
+    else:
+        ns['gx'], ns['gy'], ns['gz'] = grid_indices
+    return ns
+
+
+def _value(field, param, t, points, s, label, tempo=120., values=None, namespace=None, names=None):
+    """values: {name: value} of the object's variables at t (variable_values), or None."""
+    if not param.expression:
+        if not param.points: return float(param.value)
+        return _clean_scalar(float(param.value) * float(gain_at(param.points, param.clock, t)), field)
+    count = len(points)
+    if namespace is None: namespace = _expr_namespace(t, points, s, tempo, values)
+    if names is None: names = tuple(values) if values else ()
     with np.errstate(all='ignore'):
-        try: value = eval(compiled_expression(param.expression, label, names), namespace) if param.expression else param.value
+        try: value = eval(compiled_expression(param.expression, label, names), namespace)
         except (ArithmeticError, ValueError, TypeError) as error: raise ValueError(f'{label}: {error}') from None
-        value = np.asarray(value, dtype=float) * gain_at(param.points, param.clock, t)
-    if value.ndim > 1 or (value.ndim == 1 and len(value) != count):
+        if param.points:
+            gain = float(gain_at(param.points, param.clock, t))
+            value = np.asarray(value, dtype=float) * gain if np.ndim(value) > 0 else float(value) * gain
+    if np.ndim(value) == 0:
+        cleaned = _clean_scalar(float(value), field)
+        return np.full(count, cleaned) if field.formula else cleaned
+    value = np.asarray(value, dtype=float)
+    if value.ndim > 1 or len(value) != count:
         raise ValueError(f'{label}: expression must give one value per point.')
     # Map sends every non-finite result to 0 (1/x at x = 0 must not pin the beam to an edge).
-    value = np.nan_to_num(np.broadcast_to(value, (count,)).astype(float), nan=0.,
+    value = np.nan_to_num(value, nan=0.,
                           posinf=0. if field.formula else field.high, neginf=0. if field.formula else field.low)
     return np.clip(value, field.low, field.high) if field.clip else value
 
@@ -375,17 +505,57 @@ def _rotate(points, axis, degrees):
     return np.column_stack((c*x - s*y, s*x + c*y, z))
 
 
-def apply_stack(points, stack, t, s=None, tempo=120., probe=False, values=None):
+def _bend(points, axis, degrees):
+    if np.ndim(degrees) == 0 and abs(degrees) < 1e-9: return points
+    rad = np.deg2rad(degrees)
+    x, y, z = points[:, 0], points[:, 1], points[:, 2]
+    if axis == 0:
+        theta = rad * x
+        safe = np.where(np.abs(rad) > 1e-6, rad, 1.0)
+        r = 1.0 / safe - y
+        nx = np.where(np.abs(rad) > 1e-6, r * np.sin(theta), x)
+        ny = np.where(np.abs(rad) > 1e-6, 1.0 / safe - r * np.cos(theta), y)
+        return np.column_stack((nx, ny, z))
+    if axis == 1:
+        theta = rad * y
+        safe = np.where(np.abs(rad) > 1e-6, rad, 1.0)
+        r = 1.0 / safe - x
+        ny = np.where(np.abs(rad) > 1e-6, r * np.sin(theta), y)
+        nx = np.where(np.abs(rad) > 1e-6, 1.0 / safe - r * np.cos(theta), x)
+        return np.column_stack((nx, ny, z))
+    theta = rad * z
+    safe = np.where(np.abs(rad) > 1e-6, rad, 1.0)
+    r = 1.0 / safe - y
+    nz = np.where(np.abs(rad) > 1e-6, r * np.sin(theta), z)
+    ny = np.where(np.abs(rad) > 1e-6, 1.0 / safe - r * np.cos(theta), y)
+    return np.column_stack((x, ny, nz))
+
+
+def apply_stack(points, stack, t, s=None, tempo=120., probe=False, values=None, grid_indices=None):
     """(N, 3) object-space points -> (posed (N, 3) points, noise intensity (N,) or None).
     values: the object's variables at t (variable_values), evaluated once before the stack."""
     points = np.array(points, dtype=float).reshape(-1, 3)
     noise = None
     variables = values
+    names = tuple(variables) if variables else ()
+    t_float = float(t)
+    count = len(points)
+    t_arr = p_arr = s_arr = None
     for transform in active(stack):
         fields = FIELDS[transform.kind]
-        values = [None if is_identity(field, param) else _value(field, param, t, points, s, field_label(transform.kind, field), tempo, variables)
+        ns = None
+        if any(param.expression and not is_identity(field, param) for field, param in zip(fields, transform.params)):
+            if t_arr is None:
+                t_arr = np.full(count, t_float)
+                beats = tempo.beats(t_float) if hasattr(tempo, 'beats') else t_float * tempo / 60.
+                p_arr = np.full(count, beats)
+                s_arr = np.zeros(count) if s is None else s
+            ns = _expr_namespace(t_float, points, s, tempo, variables, t_arr, p_arr, s_arr, grid_indices)
+        values = [None if is_identity(field, param) else _value(field, param, t_float, points, s, field_label(transform.kind, field), tempo, variables, ns, names)
                   for field, param in zip(fields, transform.params)]
         kind = transform.kind
+        if kind in TOPOLOGY_KINDS or kind == POINTIFY:
+            continue
         if kind == MAP:
             # Every axis reads the points from before the step; identity axes stay untouched.
             if any(value is not None for value in values):
@@ -393,11 +563,13 @@ def apply_stack(points, stack, t, s=None, tempo=120., probe=False, values=None):
         elif kind == ROTATE:
             for axis, degrees in enumerate(values): points = _rotate(points, axis, degrees)
         elif kind == SPIN:
-            for axis, spin in enumerate(values): points = _rotate(points, axis, 360.*spin*t)
+            for axis, spin in enumerate(values): points = _rotate(points, axis, 360.*spin*t_float)
         elif kind in (TRANSLATE, MOTION_PATH):
-            points = points + np.column_stack([np.broadcast_to(v, (len(points),)) for v in values])
+            if all(np.ndim(v) == 0 for v in values): points = points + np.array(values, dtype=float)
+            else: points = points + np.column_stack([np.broadcast_to(v, (count,)) for v in values])
         elif kind == SCALE:
-            points = points * np.column_stack([np.broadcast_to(v, (len(points),)) for v in values])
+            if all(np.ndim(v) == 0 for v in values): points = points * np.array(values, dtype=float)
+            else: points = points * np.column_stack([np.broadcast_to(v, (count,)) for v in values])
         elif kind == SHEAR:
             xy, xz, yx, yz, zx, zy = values
             x, y, z = points[:, 0], points[:, 1], points[:, 2]
@@ -408,8 +580,58 @@ def apply_stack(points, stack, t, s=None, tempo=120., probe=False, values=None):
             distance = values[0]
             factor = distance / np.maximum(distance - points[:, 2], .05*distance)
             points = np.column_stack((points[:, 0]*factor, points[:, 1]*factor, points[:, 2]))
+        elif kind == QUANTIZE:
+            cols = []
+            for axis, step in enumerate(values):
+                coord = points[:, axis]
+                if np.ndim(step) == 0:
+                    cols.append(np.round(coord / step) * step if step > 1e-9 else coord)
+                else:
+                    safe = np.where(step > 1e-9, step, 1.0)
+                    cols.append(np.where(step > 1e-9, np.round(coord / safe) * safe, coord))
+            points = np.column_stack(cols)
+        elif kind == TWIST:
+            for axis, deg_per_unit in enumerate(values):
+                if np.ndim(deg_per_unit) == 0 and deg_per_unit == 0: continue
+                points = _rotate(points, axis, deg_per_unit * points[:, axis])
+        elif kind == BEND:
+            for axis, deg in enumerate(values): points = _bend(points, axis, deg)
+        elif kind == WAVE:
+            amp, freq, speed, radial = values
+            if radial:
+                r = np.linalg.norm(points, axis=1)
+                offset = amp * np.sin(2. * np.pi * (freq * r - speed * t_float))
+                scale = np.where(r > 1e-9, 1. + offset / np.maximum(r, 1e-9), 1.)
+                points = points * scale[:, None]
+            else:
+                shift = amp * np.sin(2. * np.pi * (freq * points[:, 1] + speed * t_float))
+                points = np.column_stack((points[:, 0] + shift, points[:, 1], points[:, 2]))
+        elif kind == SPHERIZE:
+            amount, radius = values
+            r = np.linalg.norm(points, axis=1)
+            rad = radius if np.ndim(radius) == 0 else np.asarray(radius)[:, None]
+            target = np.where(r[:, None] > 1e-9, points / np.maximum(r[:, None], 1e-9) * rad, 0.)
+            amt = amount if np.ndim(amount) == 0 else np.asarray(amount)[:, None]
+            points = points + amt * (target - points)
+        elif kind == GLITCH:
+            amt, bands, rate = values
+            b = np.maximum(1.0, bands)
+            band_idx = np.floor((points[:, 1] + 1.0) * 0.5 * b).astype(np.int64)
+            tick = np.floor(t_float * np.maximum(0.0, rate)).astype(np.int64)
+            h = ((band_idx * 374761393 + tick * 668265263) ^ 0x5BF03635) & 0xFFFFFFFF
+            h = ((h ^ (h >> 13)) * 1274126177) & 0xFFFFFFFF
+            h = h ^ (h >> 16)
+            jitter = ((h / 2147483647.5) - 1.0) * amt
+            points = np.column_stack((points[:, 0] + jitter, points[:, 1], points[:, 2]))
+        elif kind == ATTRACTOR:
+            strength, falloff, fx, fy, fz = values
+            focus = np.column_stack([np.broadcast_to(v, (count,)) for v in (fx, fy, fz)])
+            delta = focus - points
+            dist = np.linalg.norm(delta, axis=1)
+            pull = strength * np.exp(-falloff * dist)
+            points = points + delta * (pull[:, None] if np.ndim(pull) > 0 else pull)
         elif kind == NOISE:
-            intensity = np.broadcast_to(values[0], (len(points),)).astype(float)
+            intensity = np.broadcast_to(values[0], (count,)).astype(float)
             if transform.noise.rate == 'Sample':
                 noise = intensity if noise is None else noise + intensity
             else:
@@ -421,13 +643,215 @@ def apply_stack(points, stack, t, s=None, tempo=120., probe=False, values=None):
                 if table is None:
                     if realtime and not probe: noise_loops.missed()
                     continue
-                position = np.zeros(len(points)) if s is None else np.asarray(s)
-                base, detail = t*values[1], values[2]
+                position = np.zeros(count) if s is None else np.asarray(s)
+                base, detail = t_float*values[1], values[2]
                 shift = np.array([0, noise_loops.N//2, noise_loops.N//4])[:, None]  # x, y, z
                 first, second = _loop_value(table, np.stack(np.broadcast_arrays(
                     base+shift+position*detail, base+shift+(position-1)*detail)))
                 points = points + (intensity*(first + position*(second-first))).T
     return points, noise
+
+
+def has_topology(stack):
+    return any(t.kind in TOPOLOGY_KINDS for t in active(stack))
+
+
+def pointify_params(stack, t, tempo=120., values=None):
+    """(points_count, glide) of the last active Pointify step in stack, or None."""
+    step = next((tr for tr in reversed(active(stack)) if tr.kind == POINTIFY), None)
+    if step is None: return None
+    fields = FIELDS[POINTIFY]
+    t_float = float(t)
+    ns = _expr_namespace(t_float, _PROBE_POINT, None, tempo, values) if any(p.expression for p in step.params) else None
+    names = tuple(values) if values else ()
+    pts_v = _value(fields[0], step.params[0], t_float, _PROBE_POINT, None, field_label(POINTIFY, fields[0]), tempo, values, ns, names)
+    glide_v = _value(fields[1], step.params[1], t_float, _PROBE_POINT, None, field_label(POINTIFY, fields[1]), tempo, values, ns, names)
+    pts = float(pts_v) if np.ndim(pts_v) == 0 else float(pts_v.flat[0])
+    glide = float(glide_v) if np.ndim(glide_v) == 0 else float(glide_v.flat[0])
+    return max(2, int(round(pts))), min(max(glide, 0.), 0.5)
+
+
+def pointify_phase(phase, count, glide=0.0):
+    """Snap 0..1 phase to `count` equally spaced dots with optional linear glide (0..0.5)."""
+    scaled = phase * count
+    cell = np.floor(scaled)
+    frac = scaled - cell
+    if glide <= 1e-6:
+        return np.mod(cell, count) / count
+    hold = 1.0 - glide
+    ramp = np.where(frac > hold, (frac - hold) / glide, 0.0)
+    return np.mod(cell + ramp, count) / count
+
+
+def _subdivide_geometry(points, route, edges, connectors, noise, pieces):
+    pieces = int(pieces)
+    if pieces <= 1 or len(route) < 2:
+        return points, route, edges, connectors, noise
+    jumps = connector_steps(route, connectors)
+    n_steps = len(route) - 1
+    new_pts = list(points)
+    new_noise = list(noise) if noise is not None else None
+    new_route = [int(route[0])]
+    drawn, joins = [], []
+    edge_cache = {}
+    for step_i in range(n_steps):
+        a, b = int(route[step_i]), int(route[step_i + 1])
+        if jumps[step_i] or a == b:
+            new_route.append(b)
+            joins.append((a, b))
+            continue
+        key = (a, b) if a < b else (b, a)
+        mids = edge_cache.get(key)
+        if mids is None:
+            pa, pb = points[a], points[b]
+            mids = []
+            for k in range(1, pieces):
+                f = k / pieces
+                idx = len(new_pts)
+                new_pts.append(pa + f * (pb - pa))
+                if new_noise is not None:
+                    new_noise.append(noise[a] + f * (noise[b] - noise[a]))
+                mids.append(idx)
+            edge_cache[key] = mids
+        chain = mids if a < b else mids[::-1]
+        prev = a
+        for m in chain:
+            new_route.append(m); drawn.append((prev, m)); prev = m
+        new_route.append(b); drawn.append((prev, b))
+    if len(new_pts) > MAX_TOPOLOGY_VERTICES or len(new_route) > MAX_TOPOLOGY_ROUTE:
+        raise ValueError('Subdivide exceeds the point/route detail budget.')
+    pts_arr = np.asarray(new_pts, dtype=float)
+    route_arr = np.asarray(new_route, dtype=int)
+    joins_arr = np.asarray(joins, dtype=int).reshape(-1, 2) if joins else np.empty((0, 2), dtype=int)
+    edges_arr = np.asarray(drawn + joins, dtype=int).reshape(-1, 2) if (drawn or joins) else np.empty((0, 2), dtype=int)
+    noise_arr = np.asarray(new_noise, dtype=float) if new_noise is not None else None
+    return pts_arr, route_arr, edges_arr, joins_arr, noise_arr
+
+
+def _tile_copies(base_points, route, edges, connectors, noise, copy_transforms, copy_gxyz):
+    """Tile base geometry across copies, connecting each copy to the next with a connector jump."""
+    n_copies = len(copy_transforms)
+    if n_copies <= 1:
+        pts = copy_transforms[0](base_points)
+        g = copy_gxyz[0]
+        n = len(pts)
+        return pts, route, edges, connectors, noise, (np.full(n, g[0]), np.full(n, g[1]), np.full(n, g[2]))
+    n_v = len(base_points)
+    n_r = len(route)
+    if n_v * n_copies > MAX_TOPOLOGY_VERTICES or n_r * n_copies > MAX_TOPOLOGY_ROUTE:
+        raise ValueError('Array transform exceeds the point/route detail budget.')
+    base_edges = np.asarray(edges, dtype=int).reshape(-1, 2)
+    base_conn = np.asarray(connectors, dtype=int).reshape(-1, 2) if len(connectors) else np.empty((0, 2), dtype=int)
+    all_pts, all_routes, all_edges, all_conn = [], [], [], []
+    gx_parts, gy_parts, gz_parts = [], [], []
+    for k, (fn, (gx, gy, gz)) in enumerate(zip(copy_transforms, copy_gxyz)):
+        off = k * n_v
+        all_pts.append(fn(base_points))
+        r_k = route + off
+        if k > 0:
+            jump = (int(all_routes[-1][-1]), int(r_k[0]))
+            all_conn.append(np.array([jump], dtype=int))
+            all_edges.append(np.array([jump], dtype=int))
+        all_routes.append(r_k)
+        if len(base_edges): all_edges.append(base_edges + off)
+        if len(base_conn): all_conn.append(base_conn + off)
+        gx_parts.append(np.full(n_v, float(gx)))
+        gy_parts.append(np.full(n_v, float(gy)))
+        gz_parts.append(np.full(n_v, float(gz)))
+    if all_routes[-1][-1] != all_routes[0][0]:
+        close = (int(all_routes[-1][-1]), int(all_routes[0][0]))
+        all_conn.append(np.array([close], dtype=int))
+        all_edges.append(np.array([close], dtype=int))
+        all_routes.append(np.array([all_routes[0][0]], dtype=int))
+    pts_out = np.vstack(all_pts)
+    route_out = np.concatenate(all_routes)
+    edges_out = np.vstack(all_edges) if all_edges else np.empty((0, 2), dtype=int)
+    conn_out = np.vstack(all_conn) if all_conn else np.empty((0, 2), dtype=int)
+    noise_out = np.tile(noise, n_copies) if noise is not None else None
+    g_out = (np.concatenate(gx_parts), np.concatenate(gy_parts), np.concatenate(gz_parts))
+    return pts_out, route_out, edges_out, conn_out, noise_out, g_out
+
+
+def apply_topology_stack(points, route, edges, connectors, stack, t, s=None, tempo=120., probe=False, values=None):
+    """Run a transform stack that includes topology/array steps (Subdivide, Gridify, Radial array,
+    Kaleidoscope, Echo). Returns (points, route, edges, connectors, noise)."""
+    pts = np.array(points, dtype=float).reshape(-1, 3)
+    route = np.asarray(route, dtype=int)
+    edges = np.asarray(edges, dtype=int).reshape(-1, 2)
+    connectors = np.asarray(connectors, dtype=int).reshape(-1, 2) if len(connectors) else np.empty((0, 2), dtype=int)
+    noise = None
+    grid_indices = None
+    t_float = float(t)
+    names = tuple(values) if values else ()
+    cur_s = s
+    for transform in active(stack):
+        kind = transform.kind
+        if kind not in TOPOLOGY_KINDS:
+            if kind == POINTIFY: continue
+            pts, step_noise = apply_stack(pts, (transform,), t_float, cur_s, tempo, probe, values, grid_indices=grid_indices)
+            if step_noise is not None:
+                noise = step_noise if noise is None else noise + step_noise
+            continue
+        fields = FIELDS[kind]
+        ns = _expr_namespace(t_float, _PROBE_POINT, None, tempo, values) if any(p.expression for p in transform.params) else None
+        vals = [_value(f, p, t_float, _PROBE_POINT, None, field_label(kind, f), tempo, values, ns, names)
+                for f, p in zip(fields, transform.params)]
+        vals = [float(v) if np.ndim(v) == 0 else float(v.flat[0]) for v in vals]
+        if kind == SUBDIVIDE:
+            pts, route, edges, connectors, noise = _subdivide_geometry(pts, route, edges, connectors, noise, vals[0])
+            grid_indices = None
+        elif kind == GRIDIFY:
+            cx, cy, cz = int(vals[0]), int(vals[1]), int(vals[2])
+            sx, sy, sz = vals[3], vals[4], vals[5]
+            fns, gxyz = [], []
+            for iz in range(cz):
+                y_range = range(cy) if iz % 2 == 0 else range(cy - 1, -1, -1)
+                for iy in y_range:
+                    x_range = range(cx) if (iy + iz) % 2 == 0 else range(cx - 1, -1, -1)
+                    for ix in x_range:
+                        off = np.array([(ix - (cx - 1) * 0.5) * sx, (iy - (cy - 1) * 0.5) * sy, (iz - (cz - 1) * 0.5) * sz])
+                        fns.append(lambda p, o=off: p + o)
+                        gxyz.append((ix, iy, iz))
+            pts, route, edges, connectors, noise, grid_indices = _tile_copies(pts, route, edges, connectors, noise, fns, gxyz)
+        elif kind == RADIAL_ARRAY:
+            cnt, rad, tw, spr = int(vals[0]), vals[1], vals[2], vals[3]
+            fns, gxyz = [], []
+            for k in range(cnt):
+                ang = np.deg2rad((k / cnt) * spr if spr >= 360. else (k / max(cnt - 1, 1)) * spr)
+                rot = ang + np.deg2rad(tw * k / max(cnt - 1, 1))
+                c, sn = math.cos(rot), math.sin(rot)
+                ox, oy = rad * math.cos(ang), rad * math.sin(ang)
+                def _mk(p, c=c, sn=sn, ox=ox, oy=oy):
+                    return np.column_stack((c * p[:, 0] - sn * p[:, 1] + ox, sn * p[:, 0] + c * p[:, 1] + oy, p[:, 2]))
+                fns.append(_mk); gxyz.append((k, 0, 0))
+            pts, route, edges, connectors, noise, grid_indices = _tile_copies(pts, route, edges, connectors, noise, fns, gxyz)
+        elif kind == KALEIDOSCOPE:
+            folds, base_deg = int(vals[0]), vals[1]
+            fns, gxyz = [], []
+            for k in range(folds):
+                ang = np.deg2rad(base_deg + k * 360.0 / folds)
+                c, sn = math.cos(ang), math.sin(ang)
+                flip = -1.0 if k % 2 == 1 else 1.0
+                def _mk(p, c=c, sn=sn, flip=flip):
+                    x = p[:, 0] * flip; y = p[:, 1]
+                    return np.column_stack((c * x - sn * y, sn * x + c * y, p[:, 2]))
+                fns.append(_mk); gxyz.append((k, 0, 0))
+            pts, route, edges, connectors, noise, grid_indices = _tile_copies(pts, route, edges, connectors, noise, fns, gxyz)
+        elif kind == ECHO:
+            copies, sc, rz, ox, oy, oz = int(vals[0]), vals[1], vals[2], vals[3], vals[4], vals[5]
+            fns, gxyz = [], []
+            for k in range(copies):
+                s_k = sc ** k
+                ang = np.deg2rad(rz * k)
+                c, sn = math.cos(ang), math.sin(ang)
+                off = np.array([ox * k, oy * k, oz * k])
+                def _mk(p, s_k=s_k, c=c, sn=sn, off=off):
+                    q = p * s_k
+                    return np.column_stack((c * q[:, 0] - sn * q[:, 1] + off[0], sn * q[:, 0] + c * q[:, 1] + off[1], q[:, 2] + off[2]))
+                fns.append(_mk); gxyz.append((k, 0, 0))
+            pts, route, edges, connectors, noise, grid_indices = _tile_copies(pts, route, edges, connectors, noise, fns, gxyz)
+        cur_s = route_positions(pts, route) if uses_position(stack, names) else None
+    return pts, route, edges, connectors, noise
 
 
 def noise_curve(stack):
@@ -505,10 +929,14 @@ def path_expression(text, label='expression', names=()):
 
 def path_window(start, trace, t, tempo=120., values=None):
     """(start 0-1, trace -1..1) at pose time t; values: the object's variables at t."""
-    probe = np.zeros((1, 3))
-    window = [float(np.asarray(_value(field, param, t, probe, None, f'Path {field.label}', tempo, values)).flat[0])
-              for field, param in ((START_FIELD, start), (TRACE_FIELD, trace))]
-    return window[0] % 1. if window[0] != 1. else 1., window[1]
+    t_float = float(t)
+    ns = _expr_namespace(t_float, _PROBE_POINT, None, tempo, values) if (start.expression or trace.expression) else None
+    names = tuple(values) if values else ()
+    s_val = _value(START_FIELD, start, t_float, _PROBE_POINT, None, f'Path {START_FIELD.label}', tempo, values, ns, names)
+    t_val = _value(TRACE_FIELD, trace, t_float, _PROBE_POINT, None, f'Path {TRACE_FIELD.label}', tempo, values, ns, names)
+    w0 = float(s_val) if np.ndim(s_val) == 0 else float(s_val.flat[0])
+    w1 = float(t_val) if np.ndim(t_val) == 0 else float(t_val.flat[0])
+    return w0 % 1. if w0 != 1. else 1., w1
 
 
 def trim_route(vertices, route, connectors, start, trace):
@@ -521,7 +949,7 @@ def trim_route(vertices, route, connectors, start, trace):
     vertices = np.asarray(vertices, dtype=float); route = np.asarray(route, dtype=int)
     closed = route if route[0] == route[-1] else np.r_[route, route[0]]
     lengths = np.linalg.norm(np.diff(vertices[closed], axis=0), axis=1)
-    total = lengths.sum()
+    total = float(lengths.sum())
     if total < 1e-12 or len(closed) < 2: return None
     body = closed[:-1]
     extended = np.r_[np.tile(body, 3), body[0]]
@@ -539,24 +967,44 @@ def trim_route(vertices, route, connectors, start, trace):
     n = len(vertices)
     a = vertices[extended[ka]] + fa * (vertices[extended[ka+1]] - vertices[extended[ka]])
     b = vertices[extended[kb]] + fb * (vertices[extended[kb+1]] - vertices[extended[kb]])
-    inner = [k for k in range(ka + 1, kb + 1) if lo < cumulative[k] < hi]
-    path = [n, *(int(extended[k]) for k in inner), n + 1]
-    steps = [ka, *inner]  # Original step each piece segment lies on.
-    if trace < 0: path, steps = path[::-1], steps[::-1]
-    piece = np.array(path + [path[0]])
-    drawn, joins = [], [(path[-1], path[0])]
-    for (p, q), step in zip(zip(path[:-1], path[1:]), steps):
-        (joins if jumps[step] else drawn).append((p, q))
+    inner_idx = np.arange(ka + 1, kb + 1, dtype=np.int64)
+    if len(inner_idx):
+        inner_idx = inner_idx[(cumulative[inner_idx] > lo) & (cumulative[inner_idx] < hi)]
+    path_arr = np.empty(len(inner_idx) + 2, dtype=np.int64)
+    path_arr[0] = n
+    path_arr[1:-1] = extended[inner_idx]
+    path_arr[-1] = n + 1
+    steps_arr = np.empty(len(inner_idx) + 1, dtype=np.int64)
+    steps_arr[0] = ka
+    steps_arr[1:] = inner_idx
+    if trace < 0:
+        path_arr = path_arr[::-1]
+        steps_arr = steps_arr[::-1]
+    piece = np.empty(len(path_arr) + 1, dtype=np.int64)
+    piece[:-1] = path_arr
+    piece[-1] = path_arr[0]
+    segs = np.column_stack((path_arr[:-1], path_arr[1:]))
+    is_jump = jumps[steps_arr]
+    drawn_segs = segs[~is_jump]
+    join_segs = segs[is_jump]
+    closing = np.array([[path_arr[-1], path_arr[0]]], dtype=int)
+    joins_arr = np.vstack((closing, join_segs)) if len(join_segs) else closing
+    edges = np.vstack((drawn_segs, joins_arr)) if len(drawn_segs) else joins_arr
     weights = ((int(extended[ka]), int(extended[ka+1]), fa), (int(extended[kb]), int(extended[kb+1]), fb))
-    edges = np.array(drawn + joins, dtype=int).reshape(-1, 2)
-    return np.vstack((vertices, a, b)), piece, edges, np.array(joins, dtype=int).reshape(-1, 2), weights
+    return np.vstack((vertices, a, b)), piece, edges, joins_arr, weights
 
 
 def connector_steps(route, connectors):
-    connectors = np.asarray(connectors, dtype=int).reshape(-1, 2)
+    connectors = np.asarray(connectors, dtype=np.int64).reshape(-1, 2)
     if not len(connectors): return np.zeros(len(route) - 1, dtype=bool)
-    pairs = {tuple(sorted(map(int, c))) for c in connectors}
-    return np.array([tuple(sorted((int(a), int(b)))) in pairs for a, b in zip(route[:-1], route[1:])])
+    route = np.asarray(route, dtype=np.int64)
+    c_lo = np.minimum(connectors[:, 0], connectors[:, 1])
+    c_hi = np.maximum(connectors[:, 0], connectors[:, 1])
+    c_keys = np.sort((c_lo << 32) | c_hi)
+    r0, r1 = route[:-1], route[1:]
+    r_keys = (np.minimum(r0, r1) << 32) | np.maximum(r0, r1)
+    idx = np.searchsorted(c_keys, r_keys)
+    return (idx < len(c_keys)) & (c_keys[np.minimum(idx, len(c_keys) - 1)] == r_keys)
 
 
 # Object variables (T5, 0.81.0) -------------------------------------------------------------
@@ -614,20 +1062,24 @@ def variable_values(variables, t, tempo=120.):
     """{name: value} of an object's variables at pose time t, in their order (one float each)."""
     if not variables: return {}
     t = float(t)
-    namespace = {'__builtins__': {}, **FUNCTIONS, **CONSTANTS, **_HELPERS, 't': np.full(1, t),
-                 'p': np.full(1, tempo.beats(t) if hasattr(tempo, 'beats') else t * tempo / 60.), 's': np.zeros(1)}
+    namespace = None
     values = {}
     with np.errstate(all='ignore'):
         for variable in variables:
-            label = f'Variable {variable.name}'
             if variable.expression:
+                if namespace is None:
+                    namespace = dict(_BASE_NAMESPACE)
+                    namespace['t'] = np.full(1, t)
+                    namespace['p'] = np.full(1, tempo.beats(t) if hasattr(tempo, 'beats') else t * tempo / 60.)
+                    namespace['s'] = np.zeros(1)
+                label = f'Variable {variable.name}'
                 try: value = eval(parse_expression(variable.expression, (), label), namespace)
                 except (ArithmeticError, ValueError, TypeError) as error: raise ValueError(f'{label}: {error}') from None
                 value = np.asarray(value, dtype=float)
                 if value.size != 1: raise ValueError(f'{label}: expression must give one value.')
                 value = float(value.reshape(-1)[0])
             else: value = float(variable.value)
-            value *= float(gain_at(variable.points, variable.clock, t))
+            if variable.points: value *= float(gain_at(variable.points, variable.clock, t))
             values[variable.name] = variable.low if math.isnan(value) else min(max(value, variable.low), variable.high)
     return values
 
@@ -677,17 +1129,25 @@ def renamed_variable(shape, old, new):
     for step in shape.transforms:
         params = tuple(_renamed_param(param, old, new) for param in step.params)
         steps.append(step if params == step.params else replace(step, params=params))
+    extra = {}
+    matrix = getattr(shape, 'matrix', None)
+    if matrix is not None:  # Matrix Swap/Fall speed expressions read object variables too.
+        renamed = replace(matrix, text_speed=_renamed_param(matrix.text_speed, old, new),
+                          fall_speed=_renamed_param(matrix.fall_speed, old, new))
+        if renamed != matrix: extra['matrix'] = renamed
     return replace(shape, transform_variables=tuple(replace(v, name=new) if v.name == old else v for v in shape.transform_variables),
                    transforms=tuple(steps), path_start=_renamed_param(shape.path_start, old, new),
-                   path_trace=_renamed_param(shape.path_trace, old, new))
+                   path_trace=_renamed_param(shape.path_trace, old, new), **extra)
 
 
 def variables_in_use(shape):
-    """Names of the object's variables that a step, Start or Trace expression reads."""
+    """Names of the object's variables that a step, Start, Trace or Matrix speed expression reads."""
     names = variable_names(shape.transform_variables)
     if not names: return set()
     used = set()
     params = [param for step in shape.transforms for param in step.params]
+    matrix = getattr(shape, 'matrix', None)
+    if matrix is not None: params += [matrix.text_speed, matrix.fall_speed]
     for param in (*params, shape.path_start, shape.path_trace):
         if param.expression:
             try: used |= set(compiled_expression(param.expression, 'expression', names).co_names) & set(names)

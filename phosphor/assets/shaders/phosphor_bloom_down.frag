@@ -13,7 +13,9 @@ layout(binding = 1) uniform sampler2D energy;
 
 const float MAX_ENERGY = 64.0;
 const float BLOOM_MAX = 16.0;  // Bloom is spread out, so a smaller range buys precision.
-const int MAX_FACTOR = 8;
+// Must cover every factor bloom_uniforms and halo_uniforms choose (BLOOM_DOWN_MAX_FACTOR
+// in phosphor.py): a smaller cap drops taps. Cost stays about one fetch per energy pixel.
+const int MAX_FACTOR = 32;
 
 float unpack(vec2 packed) {
     return (floor(packed.x * 255.0 + 0.5) + packed.y) / 255.0 * MAX_ENERGY;

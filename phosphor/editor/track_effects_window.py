@@ -41,6 +41,7 @@ def effect_summary(effect):
 class ParameterSlider(QSlider):
     """FlowRow starts the slider at a usable minimum and gives it the spare width."""
     def sizeHint(self):
+        self.ensurePolished()
         hint = super().sizeHint()
         hint.setWidth(48)
         return hint
@@ -167,6 +168,7 @@ class TrackEffectsPanel(QWidget):
         self.view, self.track, self.selected_track = view, -1, None
         self.gesture = None
         self.applying = False
+        self._refresh_key = None
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
         self.pending_row = None
@@ -279,6 +281,7 @@ class TrackEffectsPanel(QWidget):
                 self.pending_row = (track, track.effects, select)
                 self.refresh_timer.start(0)
             return False
+        self._refresh_key = None
         self.applying = True
         try:
             if not dragging:
@@ -411,6 +414,12 @@ class TrackEffectsPanel(QWidget):
             self.track = anchor if anchor is not None and 0 <= anchor < len(names) else 0
             self.selected_track = tracks[self.track]
         track = self.track_data()
+        state = (composer, tuple(names), self.track, track.effects if track is not None else None, track.effects_bypass if track is not None else None, track is not None)
+        expected_count = len(track.effects) if track is not None else 0
+        if select is None and self._refresh_key == state and self.chain.count() == expected_count:
+            self.update_lane_buttons()
+            return
+        self._refresh_key = state
         self.track_box.blockSignals(True)
         if names != [self.track_box.itemText(i) for i in range(self.track_box.count())]:
             self.track_box.clear(); self.track_box.addItems(names)

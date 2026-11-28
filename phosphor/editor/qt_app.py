@@ -18,7 +18,7 @@ import uuid
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, QSignalBlocker, Signal, Slot, QPoint, QPointF, QEvent, QSize, QUrl
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QGuiApplication, QPalette, QAction, QSurfaceFormat, QPainter, QKeySequence, QKeyEvent, QIcon, QPixmap, QPen, QPolygonF, QValidator, QDesktopServices
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QDoubleSpinBox, QSpinBox, QTabWidget, QScrollArea,
     QListWidget, QSlider, QLineEdit, QFileDialog, QMessageBox, QDialog, QCheckBox,
     QDialogButtonBox, QTextBrowser, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QSplitter, QSplitterHandle, QSizePolicy, QLayout, QStackedWidget, QToolBar, QToolButton, QMenu)
@@ -45,8 +45,14 @@ from phosphor.engine.svg_import import load_svg
 from phosphor.audio.midi_synth import MIDI_SOURCE, NOTE_DECAYS
 from phosphor.audio.score_source import (SOURCES, MIDI_FILE_SOURCE, SCALE_NAME, TONE_SOURCE, SCALE_TYPES, NOTE_RANGE, TONE_RANGE,
     SCORE_FOLDER, file_tempo, note_name, scale_ladder, score_arrays)
-from phosphor.engine.solids import SOLIDS, PLATONIC_SOLIDS, POLYGONS, CURVES
+from phosphor.engine.solids import (
+    SOLIDS, PLATONIC_SOLIDS, EXTRA_SOLIDS, POLYGONS, EXTRA_2D, CURVES, EXTRA_CURVES,
+    OBJECT_GROUPS, PARAMETRIC_SOLIDS, ANIMATED_SOLIDS, STAR_SOLIDS, GEAR_SOLIDS,
+    RADAR_SOLID, CLOCK_SOLID, ShapeParams, default_shape_params,
+)
 from phosphor.engine.vector_text import TEXT_OBJECT, MAX_TEXT_LENGTH
+from phosphor.engine.matrix_rain import (MATRIX_OBJECT, MATRIX_LANGUAGES, MAX_SAMPLE_LENGTH, MAX_MATRIX_COLUMNS,
+    MAX_MATRIX_ROWS, TEXT_SPEED_FIELD, FALL_SPEED_FIELD, MatrixConfig)
 from phosphor.engine.scene_path import TRAVEL_MODES, MAX_TRAVEL_SPEED, INSTANT_TRAVEL
 from phosphor.editor.control_values import rotation_position, rotation_value, parse_rotation, format_rotation, integer_degrees
 from phosphor.display.crt_theme import PALETTES, button_colors
@@ -54,7 +60,7 @@ from phosphor.display import theme as themes
 from phosphor.display.branding import APP_NAME, logo_path
 from phosphor.editor.qt_scene import Scene
 from phosphor.editor.text_undo import TextUndoKeys, text_target, text_history
-from phosphor.engine.signal_engine import audition_shapes, object_id
+from phosphor.engine.signal_engine import audition_shapes, object_id, object_stack, shape_connectors, cached_route_positions, _final_pose
 from phosphor.display.qt_scope import GpuScope
 from phosphor.engine.automation import lane_points
 from phosphor.engine.lane_access import get_points, set_points, default_points
@@ -64,21 +70,24 @@ from phosphor.editor.composer_view import ComposerPanel, position_text, AUDIO_TR
 from phosphor.editor.lane_strip import LANE_HEIGHT
 from phosphor.engine.tempo_map import Meter
 from phosphor.engine.composition import (COMPOSER, SANDBOX, WORKSPACES, BEATS_PER_BAR, DEFAULT_CLIP_BEATS, MAX_BEATS, new_project,
-    render_song, song_cycle, song_seconds, export_song, add_clip, remove_clip, fit_clip, with_clip, validate_project, clip_settings)
+    render_song, song_cycle, song_seconds, export_song, add_clip, remove_clip, fit_clip, with_clip, duplicated_clip_named, validate_project, clip_settings)
 from phosphor.engine.track_chain import ChainState
 from phosphor.storage.project_files import read_project, save_project, project_document, read_workspace, write_workspace, PROJECT_SUFFIX
 from phosphor.engine.audio_clips import audio_clip_from_file, audio_clip_end_beats, decoded, alias_decoded, matches, processing_tail
 from phosphor.engine import audio_clips
 from phosphor.engine import audio_edit, audio_media, audio_tracks
 from phosphor.editor.composer_view import track_layout
-from phosphor.engine.transforms import START_FIELD, TRACE_FIELD, PATH_HELP, PATH_EXPRESSION_HELP, path_expression
+from phosphor.engine.transforms import START_FIELD, TRACE_FIELD, PATH_HELP, PATH_EXPRESSION_HELP, path_expression, stack_varies_with_time
+from phosphor.engine.transforms import apply_topology_stack, has_topology, uses_position, variable_values
 from phosphor.editor.function_panel import FunctionPanel
 from phosphor.editor.browser_panel import BrowserPanel, LeftPanel
+from phosphor.editor.quick_add import QuickAddDialog, collect_entries, FILTER_ALL, FILTER_TRANSFORMS
 from phosphor.editor.track_effects_window import TrackEffectsPanel
 from phosphor.editor.recurrence_panel import RecurrencePanel
-from phosphor.engine.recurrence import RECURRENCE_OBJECT
+from phosphor.engine.recurrence import RECURRENCE_OBJECT, RECURRENCE_GROUPS
 from phosphor.editor.video_player import VideoPanel, VideoPlayer, LINE_WIDTH, field_gain, clock
-from phosphor.engine.function_plot import PARAMETRIC_OBJECT
+from phosphor.engine.function_plot import PARAMETRIC_OBJECT, PARAMETRIC_GROUPS
+from phosphor.engine.transform_presets import BUILTIN_RECIPES
 from phosphor.editor.preference_panels import AppearanceEditor, SignalOutputEditor
 from phosphor.display.time_sweep import DEFAULT_WINDOW_MS, EDGES, EDGE_RISING, SEPARATION_RANGE, TRIGGERS, TRIGGER_BOTH, TRIGGER_X, WINDOW_RANGE_MS, DualSweep
 from phosphor.storage.signal_preferences import (SIGNAL_PREFERENCES_PATH, DEFAULT_SIGNAL_PREFERENCES,
@@ -122,10 +131,70 @@ NO_MIDI_DEVICE = 'None'
 # HANDLE_DIM is their opacity at full show (a dimmed accent); AXIS_OPACITY the XYZ key's.
 HANDLE_HOLD, HANDLE_FADE, HANDLE_DIM = 1.5, .4, .55
 AXIS_OPACITY = .5
+_HANDLE_ANGLES = np.linspace(0, 2*np.pi, 20)
+_HANDLE_RING = stroke_triangles(np.column_stack([np.cos(_HANDLE_ANGLES), np.sin(_HANDLE_ANGLES)])*6, 1.5)
+_CORNER_BOX = stroke_triangles(np.array([[-6,-6],[6,-6],[6,6],[-6,6],[-6,-6]], dtype=np.float32), 1.5)
+_AXIS_GLYPHS = tuple(
+    np.concatenate([stroke_triangles(np.array(line, dtype=np.float32), 1.5) for line in lines])
+    for lines in (([[0,0],[6,8]], [[6,0],[0,8]]), ([[0,0],[3,4],[6,0]], [[3,4],[3,8]]), ([[0,0],[6,0],[0,8],[6,8]],))
+)
+
+def _outline_geometry(seconds, shape):
+    """(points, edges) of shape's muted outline in object space, posed at seconds. shape is posed
+    (posed_shapes: audition state, lanes and On/Off steps resolved). Topology steps (Subdivide,
+    Gridify, Radial array, Kaleidoscope, Echo) add their vertices and edges, as the audio path
+    builds them; a bypassed stack draws the bare object."""
+    raw, edges, route = shape_geometry(shape)
+    stack = object_stack(shape)
+    if not stack or not has_topology(stack):
+        return posed_object(seconds, shape, vertices=raw)[0], edges
+    values = variable_values(shape.transform_variables, seconds)
+    connectors = shape_connectors(shape)
+    s = cached_route_positions(raw, route) if uses_position(stack, tuple(values)) else None
+    posed, route, edges, _, _ = apply_topology_stack(
+        np.asarray(raw, dtype=float), route, edges, connectors[0] if connectors else np.empty((0, 2), dtype=int),
+        stack, seconds, s, values=values)
+    return _final_pose(seconds, shape, posed)[:, :2], edges
+
+
+def muted_outline(cache, seconds, shape, w, h, scale):
+    """Stroke triangles of a muted or switched-off object's faint outline in a w x h view.
+    shape is posed from the audition copy (posed_shapes(audition_shapes(...))); the outline and
+    its cache decision use the same bypass-aware, On/Off-resolved stack. cache: a dict, at most
+    256 entries; a static outline is reused across poses."""
+    pose_key = None if _outline_is_static(shape, object_stack(shape)) else seconds
+    outline_key = (shape, w, h, scale, pose_key)
+    tris = cache.get(outline_key)
+    if tris is None:
+        points, edges = _outline_geometry(seconds, shape)
+        if len(edges):
+            points = (points*shape.shape_size+[shape.position_x, shape.position_y])*[scale,-scale]+[w/2,h/2]
+            tris = stroke_edges(points, edges, .7)  # One pass for every edge (audit P3).
+        else:
+            tris = np.empty((0, 2), dtype=np.float32)
+        if len(cache) >= 256: cache.pop(next(iter(cache)))
+        cache[outline_key] = tris
+    return tris
+
+
+def _outline_is_static(shape, transforms):
+    """Whether shape's outline is the same at every pose. transforms: the stack that is drawn
+    (object_stack of the posed shape: bypass-aware, On/Off steps resolved)."""
+    if shape.spin_x or shape.spin_y or shape.spin_z:
+        return False
+    if shape.solid == MODEL_OBJECT and shape.model.animation is not None:
+        return False
+    if shape.solid in (PARAMETRIC_OBJECT, RECURRENCE_OBJECT, MATRIX_OBJECT, *ANIMATED_SOLIDS) or shape.motion is not None or shape.lanes:
+        return False
+    if stack_varies_with_time(transforms):
+        return False
+    if transforms and any(v.expression or v.points for v in shape.transform_variables):
+        return False  # Variables move the outline only through a stack that is drawn.
+    return True
 # The note roll's view settings, kept in the preferences file (UI1 adds the velocity lane's collapse).
 # What the Appearance side panel's Defaults and Revert reset (its editor's own preferences).
-APPEARANCE_KEYS = ('style', 'style_mode', 'palette', 'show_grid', 'grid_divisions', 'crt_scanlines', 'crt_glow', 'trace_interpolation', 'phosphor',
-                   'beam_profile', 'phosphor_custom', 'display_rate', *VISUAL_DEFAULTS)
+APPEARANCE_KEYS = ('style', 'style_mode', 'palette', 'show_grid', 'grid_style', 'grid_divisions', 'crt_scanlines', 'crt_glow', 'trace_interpolation', 'phosphor',
+                   'beam_profile', 'graphics_quality', 'phosphor_custom', 'display_rate', *VISUAL_DEFAULTS)
 ROLL_VIEW_KEYS = ('roll_scale', 'roll_scale_root', 'roll_scale_snap', 'roll_hear_notes', 'roll_velocity_lane',
                   'roll_velocity_collapsed', 'roll_audio_gain_lane', 'roll_audio_lane')
 
@@ -202,12 +271,19 @@ def object_label(shape):
     """The objects list name of a scene object."""
     prefix = 'Motion: ' if is_motion_guide(shape) else ''
     if shape.solid == TEXT_OBJECT: return prefix+f'Text: {shape.text[:20] or "(blank)"}'
+    if shape.solid == MATRIX_OBJECT:
+        cfg = shape.matrix or MatrixConfig()
+        return prefix+f'Matrix: {cfg.language_a.split()[0]} + {cfg.language_b.split()[0]}'
     if shape.solid == CUSTOM_OBJECT: return prefix+shape.custom.name
     if shape.solid == MODEL_OBJECT: return prefix+shape.model.name
     if shape.solid == RECURRENCE_OBJECT: return prefix+f'Recurrence: x = {shape.recurrence.x[:18]}'
     if shape.solid == PARAMETRIC_OBJECT:
         depth = ' · 3D' if shape.plot.z != '0' else ''
         return prefix+f'Equation: x = {shape.plot.x[:18]}{depth}'
+    if shape.solid in STAR_SOLIDS and shape.shape_params is not None:
+        return prefix+f'Star ({shape.shape_params.points}-point)'
+    if shape.solid in GEAR_SOLIDS and shape.shape_params is not None:
+        return prefix+f'Gear ({shape.shape_params.teeth}-tooth)'
     return prefix+shape.solid
 
 
@@ -247,6 +323,9 @@ def bar_icon(name, color, metrics):
             line([(x, y+10*dy), (x, y), (x+10*dx, y)])
     elif name == 'trace':  # A Lissajous figure.
         line([(24+16*math.sin(3*t), 24+16*math.sin(2*t)) for t in np.linspace(0, 2*math.pi, 120)])
+    elif name == 'desk3d':  # Vintage oscilloscope cabinet with CRT + knobs.
+        painter.drawRect(6, 12, 36, 24); painter.drawRect(10, 16, 16, 16)
+        painter.drawEllipse(31, 17, 6, 6); painter.drawEllipse(31, 26, 6, 6)
     elif name in ('play', 'stop', 'pause'):
         painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(QColor(color))
         if name == 'play': painter.drawPolygon(QPolygonF([QPointF(14, 9), QPointF(38, 24), QPointF(14, 39)]))
@@ -291,11 +370,23 @@ class LineHandle(QSplitterHandle):
     def set_theme(self, theme):
         self.color = QColor(theme.colors['border'])
         self.hover_color = QColor(theme.colors['accent'])
+        self.vintage = theme.style == themes.VINTAGE
         self.update()
 
     @guarded_paint
     def paintEvent(self, event):
         painter = QPainter(self); color = self.hover_color if self.underMouse() else self.color
+        if self.vintage and not self.underMouse():
+            hi = QColor('#f2eee2')
+            if self.orientation() == Qt.Orientation.Horizontal:
+                x = self.width() // 2
+                painter.fillRect(x - 1, 0, 1, self.height(), color)
+                painter.fillRect(x, 0, 1, self.height(), hi)
+            else:
+                y = self.height() // 2
+                painter.fillRect(0, y - 1, self.width(), 1, color)
+                painter.fillRect(0, y, self.width(), 1, hi)
+            return
         if self.orientation() == Qt.Orientation.Horizontal: painter.fillRect(self.width() // 2, 0, 1, self.height(), color)
         else: painter.fillRect(0, self.height() // 2, self.width(), 1, color)
 
@@ -442,15 +533,50 @@ class ViewHost(QWidget):
         if self.phosphor: self.phosphor.close(); self.closed_phosphor,self.phosphor = self.phosphor,None
 
 
+class _VintageToolBar(QToolBar):
+    """Application bar that paints brushed aluminum + rackmount screws when Vintage is active."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._vintage = False
+
+    def set_vintage(self, enabled):
+        enabled = bool(enabled)
+        if enabled != self._vintage:
+            self._vintage = enabled
+            self.update()
+
+    @guarded_paint
+    def paintEvent(self, event):
+        if self._vintage:
+            from phosphor.editor import vintage_style
+            p = QPainter(self)
+            vintage_style.paint_aluminum_bar(p, self.rect())
+            p.end()
+            return
+        super().paintEvent(event)
+
+
 class SquareStage(QWidget):
+    BEZEL = 34
+
     def __init__(self):
         super().__init__()
         self.host = ViewHost()
         self.host.setParent(self)
         self.fill_screen = False
+        self._vintage = False
+        self._trace_color = '#5ce677'
         # Shown instead of the host while the monitor is in its own window.
         self.placeholder = QPushButton('Signal monitor popped out\n\nClick to bring it back', self)
         self.placeholder.setObjectName('monitor_placeholder'); self.placeholder.setFlat(True); self.placeholder.hide()
+
+    def set_vintage(self, enabled, trace_color='#5ce677'):
+        enabled = bool(enabled)
+        if enabled == self._vintage and trace_color == self._trace_color: return
+        self._vintage = enabled
+        self._trace_color = trace_color
+        self.layout_host()
+        self.update()
 
     def set_popped(self, popped):
         self.host.setVisible(not popped); self.placeholder.setVisible(popped); self.layout_host()
@@ -463,9 +589,19 @@ class SquareStage(QWidget):
         if self.fill_screen:
             self.host.setGeometry(self.rect())
         else:
-            size = max(1,min(self.width(),self.height()))
-            self.host.setGeometry((self.width()-size)//2,(self.height()-size)//2,size,size)
+            pad = self.BEZEL if self._vintage else 0
+            size = max(1, min(self.width(), self.height()) - 2 * pad)
+            self.host.setGeometry((self.width()-size)//2, (self.height()-size)//2, size, size)
         self.placeholder.setGeometry(self.host.geometry())
+
+    @guarded_paint
+    def paintEvent(self, event):
+        if not self._vintage or self.fill_screen:
+            return
+        from phosphor.editor import vintage_style
+        p = QPainter(self)
+        vintage_style.draw_crt_hood(p, self.host.geometry(), self.BEZEL, self._trace_color)
+        p.end()
 
     def resizeEvent(self, event):
         self.layout_host()
@@ -553,6 +689,8 @@ class Window(QMainWindow):
         self.preferences_dialog = None
         self.signal_dialog = None
         self.immersive = False
+        self.desk3d = False
+        self.desk3d_host = None
         self.builder = None
         self.building = False
         self.builder_index = None
@@ -640,6 +778,11 @@ class Window(QMainWindow):
         self.undo_action = self.menu_action(edit,'Undo',self.undo,'undo')
         self.redo_action = self.menu_action(edit,'Redo',self.redo,'redo')
         edit.addSeparator()
+        self.quick_add_action = QAction('Quick Add…', self)
+        self.quick_add_action.setShortcuts(key_sequences('quick_add')); self.quick_add_action.setProperty('shortcut_id', 'quick_add')
+        self.quick_add_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.quick_add_action.triggered.connect(lambda _=False: self.open_quick_add(FILTER_ALL))
+        edit.addAction(self.quick_add_action); self.addAction(self.quick_add_action)
         self.add_audio_action = self.menu_action(edit, 'Add audio clip at playhead…', self.choose_audio_clip)
         for action in (self.undo_action, self.redo_action):
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
@@ -653,7 +796,20 @@ class Window(QMainWindow):
         self.menu_action(pref,'Controls…',lambda:self.show_preferences('Controls'))  # Shortcuts, scroll and trackpad (UI2).
         view = self.menuBar().addMenu('View')
         self.zoom_song_action = self.menu_action(view, 'Zoom to song', lambda:self.zoom_composer(), 'zoom_song')
-        self.zoom_selection_action = self.menu_action(view, 'Zoom to selection', lambda:self.zoom_composer(selection=True))
+        self.zoom_selection_action = self.menu_action(view, 'Zoom to selection', lambda:self.zoom_composer(selection=True), 'zoom_selection')
+        for shortcut_id, callback in (
+                ('toggle_library', lambda: None if self.building or self.immersive else self.toggle_browser()),
+                ('panel_input', lambda: None if self.building or self.immersive else self.toggle_panel(PANEL_INPUT)),
+                ('panel_scene', lambda: None if self.building or self.immersive else self.toggle_panel(PANEL_SCENE)),
+                ('panel_mix', lambda: None if self.building or self.immersive else self.toggle_panel(PANEL_MIX)),
+                ('panel_appearance', lambda: None if self.building or self.immersive else self.toggle_panel(PANEL_APPEARANCE)),
+                ('panel_signal', lambda: None if self.building or self.immersive else self.toggle_panel(PANEL_SIGNAL)),
+                ('switch_workspace', lambda: None if self.building else self.set_workspace(SANDBOX if self.workspace == COMPOSER else COMPOSER))):
+            action = QAction(self); action.setShortcuts(key_sequences(shortcut_id))
+            action.setProperty('shortcut_id', shortcut_id)
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            action.triggered.connect(lambda checked=False, cb=callback: cb())
+            self.addAction(action)
         view.addSeparator()
         self.fullscreen_action=QAction('Full screen',self);self.fullscreen_action.setCheckable(True)
         self.fullscreen_action.setShortcuts(key_sequences('fullscreen'));self.fullscreen_action.setProperty('shortcut_id','fullscreen')
@@ -661,6 +817,9 @@ class Window(QMainWindow):
         self.immersive_action=QAction('Trace only',self);self.immersive_action.setCheckable(True)
         self.immersive_action.setShortcuts(key_sequences('trace_only'));self.immersive_action.setProperty('shortcut_id','trace_only');self.immersive_action.toggled.connect(self.set_immersive)
         view.addAction(self.immersive_action);self.addAction(self.immersive_action)
+        self.desk3d_action=QAction('3D Lab Bench',self);self.desk3d_action.setCheckable(True)
+        self.desk3d_action.setShortcuts(key_sequences('desk3d'));self.desk3d_action.setProperty('shortcut_id','desk3d');self.desk3d_action.toggled.connect(self.set_desk3d)
+        view.addAction(self.desk3d_action);self.addAction(self.desk3d_action)
         view.addSeparator()
         self.inspect_action=QAction('Inspect one cycle',self);self.inspect_action.setCheckable(True)
         self.inspect_action.setToolTip('Freeze the pose and show one cycle of the beam: route, direction, travel and a scrub cursor (display only).')
@@ -837,21 +996,48 @@ class Window(QMainWindow):
         self.buttons(live,[('Panic',self.audio.midi.panic),('Record…',self.record),('Stop recording',self.audio.midi.stop_record)])
         self.midi_status = QLabel(); self.midi_status.setWordWrap(True); live.addWidget(self.midi_status)
         # SCENE ------------------------------------------------------------------
-        self.scene_sections = QTabWidget(); scene.addWidget(self.scene_sections)
+        scene_root = scene
+        self.scene_context_label = ElidedLabel('SANDBOX · Empty scene')
+        self.scene_context_label.setObjectName('scene_context')
+        self.scene_context_label.setToolTip('Active workspace, clip, and selected object.')
+        scene_root.addWidget(self.scene_context_label)
+        self.scene_sections = QTabWidget(); scene_root.addWidget(self.scene_sections)
+        # Pinned Placement bar: visible across both Objects and Transform tabs whenever an object is selected.
+        self.placement_panel = QWidget(); self.placement_panel.setObjectName('placement_panel')
+        place_l = QVBoxLayout(self.placement_panel); place_l.setContentsMargins(2,4,2,2); place_l.setSpacing(4)
+        placement_tip = 'Position and Size apply after the transforms. Drag a center on the scope to move/select; drag the selected corner to resize.'
+        row = QHBoxLayout(); place_l.addLayout(row)
+        caption = InlineCaption('Position X, Y'); caption.setToolTip(placement_tip); row.addWidget(caption)
+        for key in ('position_x','position_y'):
+            widget = QDoubleSpinBox(); widget.setRange(-1e6,1e6); widget.setDecimals(3); widget.setObjectName(key); widget.setMinimumWidth(SPIN_MIN)
+            widget.setKeyboardTracking(False); widget.setToolTip(f'Position {key[-1].upper()}: applied after the transforms.'); row.addWidget(widget,1)
+            widget.valueChanged.connect(lambda value,key=key:self.edit(key,value)); self.parameters[key] = widget
+        row = QHBoxLayout(); place_l.addLayout(row)
+        caption = InlineCaption('Size'); caption.setToolTip(placement_tip); row.addWidget(caption)
+        widget = QDoubleSpinBox(); widget.setRange(.05,1e6); widget.setDecimals(3); widget.setObjectName('shape_size'); widget.setMinimumWidth(SPIN_MIN)
+        widget.setKeyboardTracking(False); widget.setValue(1); row.addWidget(widget,1)
+        widget.valueChanged.connect(lambda value:self.edit('shape_size',value)); self.parameters['shape_size'] = widget
+        for key in ('position_x','position_y','shape_size'): self.automation_menu(self.parameters[key],lambda key=key:('shape',self.scene.selected,key))
+        reset = QPushButton('Reset'); reset.setObjectName('reset_placement'); reset.setToolTip('Reset placement: position 0, 0 and size 1'); reset.clicked.connect(self.reset_placement); row.addWidget(reset)
+        scene_root.addWidget(self.placement_panel); self.placement_panel.hide()
         # Single tone only: the whole scene is traced once per cycle, so this is the scene's pitch.
         # It sits at the bottom of the panel, below both tabs, so the object list stays at the top.
-        scene.setAlignment(Qt.AlignmentFlag(0)); scene.addStretch(1)
+        scene_root.setAlignment(Qt.AlignmentFlag(0)); scene_root.addStretch(1)
         self.tone_panel = QWidget(); tone = QVBoxLayout(self.tone_panel); tone.setContentsMargins(0,0,0,0); tone.setSpacing(5)
         self.inline_slider(tone,'Frequency (Hz)','tone_frequency',110,*TONE_RANGE,curve='log')
         self.parameters['tone_frequency'].setToolTip('Single tone: the scene is traced once per cycle at this rate, and parametric equations see s run 0–1 at it.')
-        scene.addWidget(self.tone_panel)
+        scene_root.addWidget(self.tone_panel)
         objects_panel,transform_panel = QWidget(),QWidget()
         scene = QVBoxLayout(objects_panel); transform = QVBoxLayout(transform_panel)
         # Explicit page margins: the macOS style's 20 px sides overflowed a 340 px side panel.
         for layout in (scene,transform): layout.setAlignment(Qt.AlignmentFlag.AlignTop); layout.setSpacing(5); layout.setContentsMargins(10,8,10,8)
         self.scene_sections.addTab(objects_panel,'Objects'); self.scene_sections.addTab(transform_panel,'Transform')
-        self.shape_list = QListWidget(); self.shape_list.setMaximumHeight(84); scene.addWidget(self.shape_list)
+        self.shape_list = QListWidget(); self.shape_list.setProperty('customRows', True); scene.addWidget(self.shape_list)
         self.shape_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.shape_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.shape_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.shape_list.setToolTip('Scene objects in trace order. Drag to reorder.')
+        self.shape_list.model().rowsMoved.connect(lambda parent, start, end, dest, row: self._objects_moved(start, row))
         for action, callback in (('object_mute', lambda: self.toggle_objects('mute')),
                                  ('object_solo', lambda: self.toggle_objects('solo')),
                                  ('object_unmute_all', self.unmute_all)):
@@ -868,6 +1054,9 @@ class Window(QMainWindow):
         shape_actions=FlowRow();scene.addLayout(shape_actions)  # Wraps in a narrow panel (UI2).
         self.add_button=QPushButton('Add object');self.add_button.setObjectName('add_object');self.add_button.setMenu(self.add_menu())
         self.add_button.setProperty('menuButton', True);shape_actions.addWidget(self.add_button)
+        self.quick_add_button=QPushButton('Quick…');self.quick_add_button.setObjectName('quick_add_btn')
+        self.quick_add_button.setToolTip('Search & add any object, equation preset, transform, or recipe (Cmd/Ctrl+K)')
+        self.quick_add_button.clicked.connect(lambda:self.open_quick_add(FILTER_ALL));shape_actions.addWidget(self.quick_add_button)
         self.duplicate_button=QPushButton('Duplicate');self.duplicate_button.clicked.connect(lambda:self.shape_action('duplicate'));shape_actions.addWidget(self.duplicate_button)
         self.remove_button=QPushButton('Remove');self.remove_button.clicked.connect(lambda:self.shape_action('remove'));shape_actions.addWidget(self.remove_button)
         self.edit_shape_button=QPushButton('Edit shape…');self.edit_shape_button.setObjectName('edit_shape');self.edit_shape_button.clicked.connect(self.open_builder);scene.addWidget(self.edit_shape_button)
@@ -882,12 +1071,89 @@ class Window(QMainWindow):
         text_layout.addWidget(QLabel('A–Z, numbers and punctuation · up to 64 characters. Lowercase traces as capitals. Press Enter to apply.'))
         text_layout.addWidget(QLabel('Travel between strokes/letters is visible on a stereo scope. More text needs more samples per cycle.'))
         scene.addWidget(self.text_panel)
+        self.matrix_panel = QWidget(); self.matrix_panel.setObjectName('matrix_panel')
+        mat_layout = QVBoxLayout(self.matrix_panel); mat_layout.setContentsMargins(0,0,0,0); mat_layout.setSpacing(4)
+        self.matrix_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.matrix_lang_a = QComboBox(); self.matrix_lang_a.setObjectName('matrix_lang_a'); self.matrix_lang_a.addItems(MATRIX_LANGUAGES)
+        self.matrix_lang_a.activated.connect(lambda _: self.matrix_changed(language_a=self.matrix_lang_a.currentText()))
+        inline(mat_layout, 'Language 1', self.matrix_lang_a, 'Primary glyph set for Matrix digital rain.')
+        self.matrix_sample_a = QLineEdit(); self.matrix_sample_a.setObjectName('matrix_sample_a'); self.matrix_sample_a.setMaxLength(MAX_SAMPLE_LENGTH)
+        self.matrix_sample_a.setPlaceholderText('Optional sample string…')
+        self.matrix_sample_a.editingFinished.connect(lambda: self.matrix_changed(sample_a=self.matrix_sample_a.text()))
+        inline(mat_layout, 'Sample 1', self.matrix_sample_a, 'Optional custom characters sampled for Language 1.')
+        self.matrix_lang_b = QComboBox(); self.matrix_lang_b.setObjectName('matrix_lang_b'); self.matrix_lang_b.addItems(MATRIX_LANGUAGES)
+        self.matrix_lang_b.activated.connect(lambda _: self.matrix_changed(language_b=self.matrix_lang_b.currentText()))
+        inline(mat_layout, 'Language 2', self.matrix_lang_b, 'Secondary glyph set mixed into the rain.')
+        self.matrix_sample_b = QLineEdit(); self.matrix_sample_b.setObjectName('matrix_sample_b'); self.matrix_sample_b.setMaxLength(MAX_SAMPLE_LENGTH)
+        self.matrix_sample_b.setPlaceholderText('Optional sample string…')
+        self.matrix_sample_b.editingFinished.connect(lambda: self.matrix_changed(sample_b=self.matrix_sample_b.text()))
+        inline(mat_layout, 'Sample 2', self.matrix_sample_b, 'Optional custom characters sampled for Language 2.')
+        grid_row = QHBoxLayout(); mat_layout.addLayout(grid_row)
+        grid_row.addWidget(InlineCaption('Cols / Rows'))
+        self.matrix_cols = QSpinBox(); self.matrix_cols.setObjectName('matrix_cols'); self.matrix_cols.setRange(1, MAX_MATRIX_COLUMNS); self.matrix_cols.setKeyboardTracking(False)
+        self.matrix_cols.valueChanged.connect(lambda v: self.matrix_changed(columns=int(v))); grid_row.addWidget(self.matrix_cols, 1)
+        self.matrix_rows = QSpinBox(); self.matrix_rows.setObjectName('matrix_rows'); self.matrix_rows.setRange(2, MAX_MATRIX_ROWS); self.matrix_rows.setKeyboardTracking(False)
+        self.matrix_rows.valueChanged.connect(lambda v: self.matrix_changed(rows=int(v))); grid_row.addWidget(self.matrix_rows, 1)
+        self.matrix_fields = {}
+        for field in (TEXT_SPEED_FIELD, FALL_SPEED_FIELD):
+            w = ParamField(SliderInput, field, PATH_EXPRESSION_HELP, 'f(t)', caption_width=124)
+            w.setObjectName('matrix_' + field.name)
+            w.changed.connect(lambda param, key=field.name: self.matrix_changed(**{key: param}))
+            w.automate.connect(lambda on, key=field.name: self.automate(('matrix', self.scene.selected, key), on))
+            mat_layout.addWidget(w); self.matrix_fields[field.name] = w
+        scene.addWidget(self.matrix_panel); self.matrix_panel.hide()
+        # Configurable/animated built-in shapes (Star points, Gear teeth, Radar sweep, Clock hands)
+        self.shape_params_panel = QWidget(); self.shape_params_panel.setObjectName('shape_params_panel')
+        sp_root = QVBoxLayout(self.shape_params_panel); sp_root.setContentsMargins(0,0,0,0); sp_root.setSpacing(4)
+        self.shape_params_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        # Star controls
+        self.sp_star_box = QWidget(); star_l = QVBoxLayout(self.sp_star_box); star_l.setContentsMargins(0,0,0,0); star_l.setSpacing(4)
+        self.sp_star_points = QSpinBox(); self.sp_star_points.setObjectName('star_points'); self.sp_star_points.setRange(3, 32); self.sp_star_points.setKeyboardTracking(False)
+        self.sp_star_points.valueChanged.connect(lambda v: self.shape_params_changed(points=int(v)))
+        inline(star_l, 'Points', self.sp_star_points, 'Number of star points (3–32).')
+        self.sp_star_inner = SliderInput(0.42, 0.15, 0.90); self.sp_star_inner.setObjectName('star_inner_radius'); self.sp_star_inner.setFixedHeight(28)
+        self.sp_star_inner.edited.connect(lambda v: self.shape_params_changed(inner_radius=float(v)))
+        inline(star_l, 'Inner radius', self.sp_star_inner, 'Inner valley radius relative to outer points (0.15–0.90).')
+        sp_root.addWidget(self.sp_star_box)
+        # Gear controls
+        self.sp_gear_box = QWidget(); gear_l = QVBoxLayout(self.sp_gear_box); gear_l.setContentsMargins(0,0,0,0); gear_l.setSpacing(4)
+        self.sp_gear_teeth = QSpinBox(); self.sp_gear_teeth.setObjectName('gear_teeth'); self.sp_gear_teeth.setRange(4, 48); self.sp_gear_teeth.setKeyboardTracking(False)
+        self.sp_gear_teeth.valueChanged.connect(lambda v: self.shape_params_changed(teeth=int(v)))
+        inline(gear_l, 'Teeth', self.sp_gear_teeth, 'Number of gear teeth (4–48).')
+        self.sp_gear_depth = SliderInput(0.24, 0.08, 0.45); self.sp_gear_depth.setObjectName('gear_tooth_depth'); self.sp_gear_depth.setFixedHeight(28)
+        self.sp_gear_depth.edited.connect(lambda v: self.shape_params_changed(tooth_depth=float(v)))
+        inline(gear_l, 'Tooth depth', self.sp_gear_depth, 'Radial depth of gear teeth (0.08–0.45).')
+        sp_root.addWidget(self.sp_gear_box)
+        # Radar controls
+        self.sp_radar_box = QWidget(); radar_l = QVBoxLayout(self.sp_radar_box); radar_l.setContentsMargins(0,0,0,0); radar_l.setSpacing(4)
+        self.sp_radar_speed = SliderInput(0.35, -4.0, 4.0, curve=True); self.sp_radar_speed.setObjectName('radar_sweep_speed'); self.sp_radar_speed.setFixedHeight(28)
+        self.sp_radar_speed.edited.connect(lambda v: self.shape_params_changed(sweep_speed=float(v)))
+        inline(radar_l, 'Sweep (rev/s)', self.sp_radar_speed, 'Radar sweep arm speed in revolutions per second (positive = clockwise).')
+        sp_root.addWidget(self.sp_radar_box)
+        # Clock controls
+        self.sp_clock_box = QWidget(); clock_l = QVBoxLayout(self.sp_clock_box); clock_l.setContentsMargins(0,0,0,0); clock_l.setSpacing(4)
+        self.sp_clock_speed = SliderInput(60.0, -3600.0, 3600.0, curve=True); self.sp_clock_speed.setObjectName('clock_speed'); self.sp_clock_speed.setFixedHeight(28)
+        self.sp_clock_speed.edited.connect(lambda v: self.shape_params_changed(clock_speed=float(v)))
+        inline(clock_l, 'Speed (×)', self.sp_clock_speed, 'Clock hand speed multiplier (1× = real time, 60× = 1 min/sec, 600× = fast sweep).')
+        clk_btns = FlowRow(); clock_l.addLayout(clk_btns)
+        for lbl, spd in (('Real 1×', 1.0), ('Fast 60×', 60.0), ('Turbo 600×', 600.0), ('Pause', 0.0)):
+            b = QPushButton(lbl); b.clicked.connect(lambda _=False, s=spd: self.shape_params_changed(clock_speed=s)); clk_btns.addWidget(b)
+        clk_start = QHBoxLayout(); clock_l.addLayout(clk_start)
+        clk_start.addWidget(InlineCaption('Start H / M'))
+        self.sp_clock_hour = QSpinBox(); self.sp_clock_hour.setObjectName('clock_start_hour'); self.sp_clock_hour.setRange(0, 12); self.sp_clock_hour.setKeyboardTracking(False)
+        self.sp_clock_hour.valueChanged.connect(lambda v: self.shape_params_changed(start_hour=float(v))); clk_start.addWidget(self.sp_clock_hour, 1)
+        self.sp_clock_min = QSpinBox(); self.sp_clock_min.setObjectName('clock_start_minute'); self.sp_clock_min.setRange(0, 59); self.sp_clock_min.setKeyboardTracking(False)
+        self.sp_clock_min.valueChanged.connect(lambda v: self.shape_params_changed(start_minute=float(v))); clk_start.addWidget(self.sp_clock_min, 1)
+        sp_root.addWidget(self.sp_clock_box)
+        scene.addWidget(self.shape_params_panel); self.shape_params_panel.hide()
         self.function_panel = FunctionPanel(SliderInput); self.function_panel.setObjectName('parametric_panel')
         self.function_panel.changed.connect(self.plot_changed); scene.addWidget(self.function_panel)
         self.function_panel.automate.connect(lambda name,on:self.automate(('variable',self.scene.selected,name),on))
+        self.function_panel.add_3d_view.connect(self.add_3d_turntable_to_selected)
         self.recurrence_panel = RecurrencePanel(SliderInput); self.recurrence_panel.setObjectName('recurrence_panel')
         self.recurrence_panel.changed.connect(self.recurrence_changed); scene.addWidget(self.recurrence_panel)
         self.recurrence_panel.automate.connect(lambda name,on:self.automate(('variable',self.scene.selected,name),on))
+        self.recurrence_panel.add_3d_view.connect(self.add_3d_turntable_to_selected)
         # Path window: where along its route the object starts, and how much of it is drawn.
         self.path_panel = QWidget(); self.path_panel.setObjectName('path_panel'); path = QVBoxLayout(self.path_panel)
         path.setContentsMargins(0,0,0,0); path.setSpacing(3)
@@ -914,22 +1180,6 @@ class Window(QMainWindow):
         self.transform_panel.variables_changed.connect(self.transform_variables_changed)
         self.transform_panel.preset_inserted.connect(self.transform_preset_inserted)
         self.transform_panel.automate_variable.connect(lambda name,on:self.automate(('transform_variable',self.scene.selected,name),on))
-        # Placement is two rows (X and Y share one; Reset sits beside Size) so the tallest transform
-        # (Shear, six fields) fits 1000×700 with Windows fonts under the status strip.
-        placement_tip = 'Position and Size apply after the transforms. Drag a center on the scope to move/select; drag the selected corner to resize.'
-        row = QHBoxLayout(); scene.addLayout(row)
-        caption = InlineCaption('Position X, Y'); caption.setToolTip(placement_tip); row.addWidget(caption)
-        for key in ('position_x','position_y'):
-            widget = QDoubleSpinBox(); widget.setRange(-1e6,1e6); widget.setDecimals(3); widget.setObjectName(key); widget.setMinimumWidth(SPIN_MIN)
-            widget.setKeyboardTracking(False); widget.setToolTip(f'Position {key[-1].upper()}: applied after the transforms.'); row.addWidget(widget,1)
-            widget.valueChanged.connect(lambda value,key=key:self.edit(key,value)); self.parameters[key] = widget
-        row = QHBoxLayout(); scene.addLayout(row)
-        caption = InlineCaption('Size'); caption.setToolTip(placement_tip); row.addWidget(caption)
-        widget = QDoubleSpinBox(); widget.setRange(.05,1e6); widget.setDecimals(3); widget.setObjectName('shape_size'); widget.setMinimumWidth(SPIN_MIN)
-        widget.setKeyboardTracking(False); widget.setValue(1); row.addWidget(widget,1)
-        widget.valueChanged.connect(lambda value:self.edit('shape_size',value)); self.parameters['shape_size'] = widget
-        for key in ('position_x','position_y','shape_size'): self.automation_menu(self.parameters[key],lambda key=key:('shape',self.scene.selected,key))
-        reset = QPushButton('Reset'); reset.setObjectName('reset_placement'); reset.setToolTip('Reset placement: position 0, 0 and size 1'); reset.clicked.connect(self.reset_placement); row.addWidget(reset)
         # MIX --------------------------------------------------------------------
         self.combo(mix,'Travel between shapes','travel_mode',TRAVEL_MODES)
         mix.addWidget(QLabel('Travel speed (×)'))
@@ -986,9 +1236,13 @@ class Window(QMainWindow):
         self.statusBar().setSizeGripEnabled(False)
         self.statusBar().addPermanentWidget(self.version_label)
         self.backend_label = ElidedLabel(self.backend); self.backend_label.setObjectName('backend')
+        self.solo_pill = QPushButton('Solo active · Clear'); self.solo_pill.setObjectName('solo_pill')
+        self.solo_pill.setToolTip('One or more objects, transforms, audio clips or tracks are soloed. Click to clear all solos.')
+        self.solo_pill.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.solo_pill.clicked.connect(self.clear_all_solos); self.solo_pill.hide()
         # One line: the status takes most of the width, the backend the rest; both elide
         # with … and keep their full text in the tooltip.
-        status_text.addWidget(self.status,3); status_text.addWidget(self.backend_label,1)
+        status_text.addWidget(self.status,3); status_text.addWidget(self.backend_label,1); status_text.addWidget(self.solo_pill,0)
         # Same preference as Appearance › Phosphor intensity; saved as soon as it settles.
         self.brightness_panel = QWidget(); self.brightness_panel.setObjectName('brightness_panel')
         brightness = QHBoxLayout(self.brightness_panel); brightness.setContentsMargins(0,0,0,0); brightness.setSpacing(8)
@@ -1033,7 +1287,7 @@ class Window(QMainWindow):
 
     def make_app_bar(self):
         """Ribbon-style bar: panel buttons open their panel on the right; view and transport buttons act."""
-        self.app_bar = bar = QToolBar('Application bar'); bar.setObjectName('app_bar')
+        self.app_bar = bar = _VintageToolBar('Application bar'); bar.setObjectName('app_bar')
         bar.setMovable(False); bar.setFloatable(False); bar.setIconSize(QSize(self.theme.metrics.bar_icon_size, self.theme.metrics.bar_icon_size))
         bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         bar.toggleViewAction().setVisible(False)
@@ -1056,7 +1310,7 @@ class Window(QMainWindow):
             widget = button(name,icon,tip); widget.setCheckable(True)
             widget.clicked.connect(lambda checked=False,name=name:self.toggle_panel(name))
         bar.addSeparator()
-        for name,icon,action in (('Full screen','fullscreen',self.fullscreen_action),('Trace only','trace',self.immersive_action)):
+        for name,icon,action in (('Full screen','fullscreen',self.fullscreen_action),('Trace only','trace',self.immersive_action),('3D Lab','desk3d',self.desk3d_action)):
             widget = button(name,icon,action.text()+f' ({action.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})')
             widget.setCheckable(True); widget.toggled.connect(action.setChecked)
             action.toggled.connect(widget.setChecked)
@@ -1088,11 +1342,14 @@ class Window(QMainWindow):
             if current is not None and kind == current:
                 action.setCheckable(True); action.setChecked(text != 'SVG drawing…'); action.setEnabled(False)
             return action
-        for title,names in (('3D solids',PLATONIC_SOLIDS),('2D shapes',tuple(POLYGONS)),('Curves',CURVES)):
+        for title, subgroups in OBJECT_GROUPS:
             group = menu.addMenu(title)
-            for name in names: item(group, name, name, lambda name=name: choose(name))
+            for idx, (_sub_title, names) in enumerate(subgroups):
+                if idx > 0: group.addSeparator()
+                for name in names: item(group, name, name, lambda name=name: choose(name))
         menu.addSeparator()
         item(menu, 'Text', TEXT_OBJECT, lambda: choose(TEXT_OBJECT))
+        item(menu, 'Matrix', MATRIX_OBJECT, lambda: choose(MATRIX_OBJECT))
         item(menu, 'Parametric equation', PARAMETRIC_OBJECT, lambda: choose(PARAMETRIC_OBJECT))
         item(menu, RECURRENCE_OBJECT, RECURRENCE_OBJECT, lambda: choose(RECURRENCE_OBJECT))
         item(menu, 'Custom shape…', CUSTOM_OBJECT, lambda: choose(CUSTOM_OBJECT))
@@ -1150,6 +1407,7 @@ class Window(QMainWindow):
         self.immersive=enabled;self.drag=None
         self.stage.set_fill_screen(enabled); self.sync_monitor_controls()
         for widget in (self.top_row,self.viewer_heading,self.status,self.backend_label,self.brightness_panel,self.menuBar(),self.app_bar):widget.setVisible(not enabled)
+        self.sync_solo_pill()
         self.statusBar().setVisible(not enabled and not self._was_fullscreen)
         self.composer_panel.setVisible(not enabled and self.workspace==COMPOSER)
         self.sidebar.setVisible(not enabled and getattr(self,'_sidebar_shown',True))
@@ -1164,6 +1422,42 @@ class Window(QMainWindow):
         else:
             self.splitter.setSizes(self._split_sizes)
             self.showFullScreen() if self._was_fullscreen else self.showNormal()
+
+    def set_desk3d(self, enabled):
+        """Enter or leave the late-80s 3D Photorealistic Oscilloscope Lab Bench mode (QtQuick3D)."""
+        enabled = bool(enabled)
+        if self.building: return
+        if enabled == self.desk3d: return
+        if enabled:
+            if self.immersive: self.set_immersive(False)
+            if self.popped: self.pop_in()
+            if self.desk3d_host is None:
+                try:
+                    from phosphor.editor.desk3d import Desk3DHost
+                    self.desk3d_host = Desk3DHost(self, self.centralWidget())
+                    self.desk3d_host.controller.exitRequested.connect(lambda: self.set_desk3d(False))
+                    self.desk3d_host.view.frameSwapped.connect(self.swapped, Qt.ConnectionType.QueuedConnection)
+                    self.body.addWidget(self.desk3d_host)
+                except Exception as error:
+                    self.error(error)
+                    with QSignalBlocker(self.desk3d_action): self.desk3d_action.setChecked(False)
+                    self.sync_view_buttons()
+                    return
+            self.desk3d = True
+            self.top_row.hide(); self.vsplit.hide(); self.app_bar.hide()
+            self.body.setContentsMargins(0, 0, 0, 0); self.body.setSpacing(0)
+            self.desk3d_host.show()
+            self.switch_host(self.desk3d_host.crt_host)
+            self.desk3d_host.controller.refresh()
+            self.desk3d_host.setFocus()
+        else:
+            self.desk3d = False
+            if self.desk3d_host is not None: self.desk3d_host.hide()
+            self.body.setContentsMargins(18, 10, 18, 14); self.body.setSpacing(8)
+            self.top_row.show(); self.vsplit.show(); self.app_bar.show()
+            self.switch_host(self.main_host)
+        with QSignalBlocker(self.desk3d_action): self.desk3d_action.setChecked(enabled)
+        self.sync_view_buttons()
 
     def set_panel_width(self, width):
         """Show the side panel at width (clamped to PANEL_RANGE and the window) and remember it."""
@@ -1248,52 +1542,109 @@ class Window(QMainWindow):
         chosen = self.choose_model(str(path))
         if chosen is not None: self.add_model(*chosen)
 
-    def browser_equations(self):
-        """Built-in and saved equation presets as browser rows: (label, tooltip, (kind, name))."""
-        panel = self.function_panel; panel.reload_presets()
-        tip = lambda plot: f'x = {plot.x}\ny = {plot.y}' + (f'\nz = {plot.z}' if plot.z != '0' else '')
-        rows = [('Built-in', '', None)] + [(name, tip(plot), ('builtin', name)) for name, plot in panel.store.builtins.items()]
-        if panel.saved: rows += [('Saved', '', None)] + [(name, tip(plot), ('saved', name)) for name, plot in panel.saved.items()]
+    def browser_objects(self):
+        """Grouped 2D shapes, 3D solids, curves & math/generative objects for Library › Objects."""
+        rows = []
+        for cat_title, subgroups in OBJECT_GROUPS:
+            for sub_title, names in subgroups:
+                rows.append((f'{cat_title} · {sub_title}', '', None))
+                for name in names:
+                    tag = 'Animated 2D' if name in ANIMATED_SOLIDS else ('Configurable 2D' if name in PARAMETRIC_SOLIDS else cat_title)
+                    rows.append((name, f'{tag} — {sub_title}', name))
+        rows.append(('Math & Generative', '', None))
+        for name, tip in (
+            (TEXT_OBJECT, 'Vector text string'),
+            (MATRIX_OBJECT, 'Falling digital rain glyphs'),
+            (PARAMETRIC_OBJECT, 'Custom x(t, s), y(t, s), z(t, s) equation'),
+            (RECURRENCE_OBJECT, 'Iterative strange attractor / recurrence map'),
+        ):
+            rows.append((name, tip, name))
         return rows
 
-    def browser_add_equation(self, kind, name):
-        """Add an Equation object and load the preset into it, as one Undo step."""
-        panel = self.function_panel
-        # findData can't compare Python tuples; match the combo's (kind, name) data by hand.
-        index = next((i for i in range(panel.presets.count()) if tuple(panel.presets.itemData(i) or ()) == (kind, name)), -1)
-        if index < 0: return False
+    def browser_equations(self):
+        """Grouped Parametric & Recurrence presets (built-in + saved) as browser rows."""
+        fpanel, rpanel = self.function_panel, self.recurrence_panel
+        fpanel.reload_presets(); rpanel.reload_presets()
+        ftip = lambda plot, cat: f'Parametric · {cat}\nx = {plot.x}\ny = {plot.y}' + (f'\nz = {plot.z}' if plot.z != '0' else '')
+        rtip = lambda plot, cat: f'Recurrence · {cat} ({plot.draw}, {plot.steps} steps)\nx = {plot.x}\ny = {plot.y}' + (f'\nz = {plot.z}' if plot.z != '0' else '')
+        rows = []
+        for group_title, names in PARAMETRIC_GROUPS:
+            rows.append((f'Parametric · {group_title}', '', None))
+            for name in names:
+                if name in fpanel.store.builtins:
+                    rows.append((name, ftip(fpanel.store.builtins[name], group_title), ('parametric', 'builtin', name)))
+        if fpanel.saved:
+            rows.append(('Parametric · ★ Saved', '', None))
+            for name, plot in fpanel.saved.items():
+                rows.append((name, ftip(plot, 'Saved'), ('parametric', 'saved', name)))
+        for group_title, names in RECURRENCE_GROUPS:
+            rows.append((f'Recurrence · {group_title}', '', None))
+            for name in names:
+                if name in rpanel.store.builtins:
+                    rows.append((name, rtip(rpanel.store.builtins[name], group_title), ('recurrence', 'builtin', name)))
+        if rpanel.saved:
+            rows.append(('Recurrence · ★ Saved', '', None))
+            for name, plot in rpanel.saved.items():
+                rows.append((name, rtip(plot, 'Saved'), ('recurrence', 'saved', name)))
+        return rows
+
+    def browser_add_equation(self, *args):
+        """Add a Parametric or Recurrence object and load the preset into it, as one Undo step."""
+        if len(args) == 2:
+            eq_type, kind, name = 'parametric', args[0], args[1]
+        else:
+            eq_type, kind, name = args[0], args[1], args[2]
+        is_rec = (eq_type == 'recurrence')
+        panel = self.recurrence_panel if is_rec else self.function_panel
+        solid = RECURRENCE_OBJECT if is_rec else PARAMETRIC_OBJECT
         count = len(self.scene.settings.shapes)
         with self.undo_step(f'Add {name}'):
-            self.add_object(PARAMETRIC_OBJECT)
+            self.add_object(solid)
             # Only a new object takes the preset: never overwrite a selected equation (review 14).
-            if len(self.scene.settings.shapes) != count + 1 or self.scene.shape is None or self.scene.shape.solid != PARAMETRIC_OBJECT:
+            if len(self.scene.settings.shapes) != count + 1 or self.scene.shape is None or self.scene.shape.solid != solid:
                 return False
-            panel.load_preset(index)
+            panel.load_named_preset(kind, name)
         return True
 
     def browser_transforms(self):
         panel = self.transform_panel; panel.reload_saved()
         rows = []
-        for kind, heading in ((TRANSFORM_STEP, 'Steps'), (TRANSFORM_STACK, 'Stacks')):
+        for kind, heading in ((TRANSFORM_STEP, 'Saved Steps'), (TRANSFORM_STACK, 'Saved Stacks')):
             names = [name for name, preset in panel.saved.items() if preset.kind == kind]
             if names: rows.append((heading, '', None))
-            rows += [(name, ' → '.join(t.kind for t in panel.saved[name].transforms), name) for name in names]
+            rows += [(name, ' → '.join(t.kind for t in panel.saved[name].transforms), ('saved', name)) for name in names]
+        if BUILTIN_RECIPES:
+            rows.append(('Built-in Recipes', '', None))
+            rows += [(name, ' → '.join(t.kind for t in preset.transforms), ('recipe', name)) for name, preset in BUILTIN_RECIPES.items()]
         return rows
 
-    def browser_transform_modes(self, name):
+    def browser_transform_modes(self, key):
+        if isinstance(key, tuple):
+            source, name = key
+        else:
+            source, name = ('saved', key)
+        if source == 'recipe':
+            if name not in BUILTIN_RECIPES: return []
+            return [('Append recipe to stack', TRANSFORM_APPEND), ('Replace stack with recipe', TRANSFORM_REPLACE)]
         preset = self.transform_panel.saved.get(name)
         if preset is None: return []
         if preset.kind == TRANSFORM_STEP: return [('Insert below the selected step', TRANSFORM_APPEND)]
         return [('Append to stack', TRANSFORM_APPEND), ('Replace stack', TRANSFORM_REPLACE)]
 
-    def browser_insert_transform(self, name, mode=None):
+    def browser_insert_transform(self, key, mode=None):
         if self.scene.shape is None:
             page = self.browser.transforms; hint = page.hint.text()
-            page.hint.setText('Select an object first: saved transforms go into its stack.')
+            page.hint.setText('Select an object first: transforms go into its stack.')
             QTimer.singleShot(4000, lambda: page.hint.setText(hint))  # The usual hint comes back (review 15).
             return False
-        self.transform_panel.insert_saved(name, TRANSFORM_APPEND if mode is None else mode)
-        return True
+        if isinstance(key, tuple):
+            source, name = key
+        else:
+            source, name = ('saved', key)
+        eff_mode = TRANSFORM_APPEND if mode is None else mode
+        if source == 'recipe':
+            return self.transform_panel.insert_recipe(name, eff_mode)
+        return self.transform_panel.insert_saved(name, eff_mode)
 
     def remember_panel_width(self, width=None):
         """Keep the side panel's width as a machine preference at once (a drag reports every move); only the
@@ -1307,14 +1658,15 @@ class Window(QMainWindow):
         if self.remember_recent: self.preferences_save.start()
 
     def sync_view_buttons(self):
-        """The bar's Full screen and Trace only buttons show their actions' states."""
-        for name,action in (('Full screen',self.fullscreen_action),('Trace only',self.immersive_action)):
+        """The bar's Full screen, Trace only and 3D Lab buttons show their actions' states."""
+        for name,action in (('Full screen',self.fullscreen_action),('Trace only',self.immersive_action),('3D Lab',self.desk3d_action)):
             button=self.bar_buttons.get(name)
             if button is not None and button.isChecked()!=action.isChecked():
                 blocker=QSignalBlocker(button);button.setChecked(action.isChecked())
 
     def exit_view_modes(self):
         if self.building:self.builder.cancel_gesture();return
+        if self.desk3d:self.set_desk3d(False);return
         if self.immersive:self.set_immersive(False)
         elif self.isFullScreen():self.showNormal()
         elif self.inspector_has_focus():self.close_inspector()  # UI1: Esc in the INSPECT CYCLE panel.
@@ -1593,6 +1945,7 @@ class Window(QMainWindow):
         view.audition_chord.connect(lambda pitches, beat: self.audition_note(pitches, beat))
         panel.cycle.toggled.connect(self.cycle_toggled)
         panel.record.toggled.connect(self.toggle_note_recording)
+        panel.record_midi_menu.aboutToShow.connect(self.rebuild_record_midi_menu)
         panel.play.clicked.connect(self.play)
         panel.to_start.clicked.connect(lambda:self.seek_song(0.))
         view.seek.connect(lambda beats:self.seek_song(float(self.project.seconds(beats))))
@@ -1613,6 +1966,8 @@ class Window(QMainWindow):
         view.track_effects_requested.connect(lambda index: self.open_track_effects(index))
         view.shown_lane_changed.connect(self.effects_panel.update_lane_buttons)
         view.track_selected.connect(lambda t: self.effects_panel.set_track(t) if self.effects_panel.isVisible() else None)
+        view.automate_requested.connect(self.automate)
+        view.clip_template_requested.connect(self.append_clip_template)
         self.clip_warned = False
         panel.bpm.valueChanged.connect(self.tempo_changed)
         from phosphor.engine.metronome import TapTempo
@@ -1637,9 +1992,11 @@ class Window(QMainWindow):
             blocker = QSignalBlocker(widget)
             widget.setChecked(value) if widget is panel.loop else widget.setValue(value)
         panel.clip_label.setText(f'Editing: {project.clips[self.clip_index].name}')
+        self.update_scene_context()
         panel.delete_clip.setEnabled(len(project.clips) > 1)
         panel.position.setText(position_text(project,self.playhead_beats))
         panel.play.setText('Stop' if self.audio.running and self.audio.composer is not None else 'Play')
+        self.sync_solo_pill()
         if effects_track is not None: self.effects_panel.set_track(effects_track)
         elif self.effects_panel.isVisible(): self.effects_panel.refresh()
 
@@ -1753,6 +2110,73 @@ class Window(QMainWindow):
         try: project,index = add_clip(self.project,start)
         except ValueError as error: self.error(error); return
         self.set_project(project); self.select_clip(index)
+
+    def append_clip_template(self, template_id, beat=-1.0):
+        """Create a pre-populated Composer clip from a template (at `beat`, or appended at the next bar)."""
+        if self.workspace != COMPOSER or self.project is None: return False
+        from phosphor.engine.signal_engine import Settings
+        from phosphor.engine.function_plot import PRESETS as PARAM_PRESETS
+        from phosphor.engine.recurrence import PRESETS as REC_PRESETS
+        from phosphor.engine.object_replace import new_shape
+        self.store_clip_scene()
+        if beat >= 0.0:
+            start = float(beat)
+        else:
+            end = self.project.clips[-1].end if self.project.clips else 0.
+            meter = Meter(self.project.meter_changes)
+            bar, offset = meter.bar_of(end)
+            start = float(meter.bar_start(int(bar) + (float(offset) > 1e-9)))
+
+        turntable = BUILTIN_RECIPES['3D Turntable'].transforms
+        clip_name = None
+        new_settings = None
+        mode = 'drawing'
+        if template_id == 'empty':
+            pass
+        elif template_id == 'duplicate' and 0 <= self.clip_index < len(self.project.clips):
+            # A full copy (lanes, length, local time, offset, colour, mute), as Alt+drag makes.
+            try: project, index = duplicated_clip_named(self.project, self.clip_index, start)
+            except ValueError as error:
+                self.error(error); return False
+            with self.undo_step('Duplicate clip'):
+                self.set_project(project); self.select_clip(index)
+            return True
+        elif template_id.startswith('solid:'):
+            solid = template_id.split(':', 1)[1]
+            shape = replace(new_shape(solid), transforms=turntable)
+            new_settings = replace(Settings(), travel_mode='Faster travel', travel_speed=64., shapes=(shape,))
+            clip_name = solid
+        elif template_id.startswith('anim:'):
+            solid = template_id.split(':', 1)[1]
+            shape = new_shape(solid)
+            new_settings = replace(Settings(), travel_mode='Faster travel', travel_speed=64., shapes=(shape,))
+            clip_name = solid
+        elif template_id.startswith('param:'):
+            pname = template_id.split(':', 1)[1]
+            plot = PARAM_PRESETS.get(pname)
+            if plot is None: return False
+            xforms = turntable if plot.z != '0' else ()
+            shape = replace(new_shape(PARAMETRIC_OBJECT), plot=plot, transforms=xforms)
+            new_settings = replace(Settings(), travel_mode='Faster travel', travel_speed=64., shapes=(shape,))
+            clip_name = pname
+        elif template_id.startswith('rec:'):
+            rname = template_id.split(':', 1)[1]
+            plot = REC_PRESETS.get(rname)
+            if plot is None: return False
+            xforms = turntable if plot.z != '0' else ()
+            shape = replace(new_shape(RECURRENCE_OBJECT), recurrence=plot, transforms=xforms)
+            new_settings = replace(Settings(), travel_mode='Faster travel', travel_speed=64., shapes=(shape,))
+            clip_name = rname
+        else:
+            return False
+
+        try:
+            project, index = add_clip(self.project, start, settings=new_settings,
+                                      name=(clip_name[:48] if clip_name else None), mode=mode)
+        except ValueError as error:
+            self.error(error); return False
+        self.set_project(project); self.select_clip(index)
+        return True
 
     def seek_song(self, seconds):
         if self.midi_recorder is not None: self.stop_song()
@@ -1964,6 +2388,7 @@ class Window(QMainWindow):
 
     def flash(self, text):
         self.notice = (text,time.perf_counter()+5); self.last_status = 0
+        self.statusBar().showMessage(text, 5000)
 
     # Documents follow the workspace ---------------------------------------------
     def open_document(self): self.open_project() if self.workspace == COMPOSER else self.open_scene()
@@ -2088,6 +2513,61 @@ class Window(QMainWindow):
         return replace(self.scene.settings,shapes=self.audition_shapes(),corner_dwell_us=dwell,motion_time_offset=self.motion_audio_offset if self.audio.running else 0.,shape_redraw_count=count,route_mode=self.signal_preferences['route_mode'],sample_rate=self.audio.sample_rate,
                        switch_sweep_ms=self.signal_preferences['switch_sweep_ms'],
                        tempo=self.project.bpm)  # p (beats) follows the Composer tempo, in the Sandbox too.
+
+    def any_solo(self):
+        return bool(self.solo_ids or self.transform_solos or (self.workspace == COMPOSER and (self.audio_solos or self.track_solos)))
+
+    def sync_solo_pill(self):
+        if hasattr(self, 'solo_pill'):
+            self.solo_pill.setVisible(not self.immersive and self.any_solo())
+
+    def clear_all_solos(self):
+        self.clear_solos()
+        self.audio_solos.clear(); self.track_solos.clear()
+        if self.audio.composer is not None: self.audio.composer = (self.output_project(), self.play_start)
+        self.refresh_composer(); self.sync()
+        self.flash('Cleared all solos.')
+
+    def rebuild_record_midi_menu(self):
+        menu = self.composer_panel.record_midi_menu
+        menu.clear()
+        current = self.audio.midi.port_name if self.audio.midi.port is not None else None
+        names = [self.devices.itemData(i) for i in range(self.devices.count()) if self.devices.itemData(i)]
+        if current and current not in names: names.insert(0, current)
+        none_action = menu.addAction(NO_MIDI_DEVICE)
+        none_action.setCheckable(True); none_action.setChecked(current is None)
+        none_action.triggered.connect(lambda checked=False: self._pick_composer_midi(None))
+        for name in names:
+            action = menu.addAction(name.replace('&', '&&'))
+            action.setCheckable(True); action.setChecked(name == current)
+            action.triggered.connect(lambda checked=False, n=name: self._pick_composer_midi(n))
+        if not names:
+            empty = menu.addAction('No MIDI inputs listed (click Refresh)'); empty.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction('Refresh MIDI devices', self.refresh_ports)
+
+    def _pick_composer_midi(self, name):
+        self.scene.device = name or ''
+        if name: self.connect_midi()
+        else: self.disconnect_midi()
+        self.sync()
+
+    def _objects_moved(self, start, row):
+        count = len(self.scene.settings.shapes)
+        if not 0 <= start < count: return
+        to = min(row if row < start else row - 1, count - 1)
+        if to == start: return
+        QTimer.singleShot(0, lambda s=start, d=to: self.reorder_objects(s, d))
+
+    def reorder_objects(self, source, destination):
+        if source == destination: return False
+        with self.undo_step('Reorder objects'):
+            if not self.scene.move(source, destination): return False
+            self.clear_solos()
+            self.cycle_key = None
+            self.audio.parameters = (self.output_settings(), self.scene.mode)
+            self.sync()
+        return True
 
     def clear_solos(self):
         self.solo_ids.clear(); self.transform_solos.clear()
@@ -2421,6 +2901,8 @@ class Window(QMainWindow):
         if getattr(self,'builder',None) is not None:self.builder.route_mode=value['route_mode'];self.builder.canvas.update()
         if source is not getattr(self,'signal_editor',source):self.signal_editor.load(value)
         self.audio.parameters=(self.output_settings(),self.scene.mode)
+        if getattr(self, 'desk3d_host', None) is not None:
+            self.desk3d_host.sync_quality()
 
     def signal_edited(self,values):
         try:self.apply_signal_preferences(values,self.signal_editor);self.signal_save.start()
@@ -2622,6 +3104,82 @@ class Window(QMainWindow):
         except ValueError as error: self.error(error)
         self.sync()
 
+    def matrix_changed(self, **updates):
+        if self.scene.shape is None or self.scene.shape.solid != MATRIX_OBJECT: return
+        cfg = replace(self.scene.shape.matrix or MatrixConfig(), **updates)
+        try: self.scene.change('matrix', cfg)
+        except ValueError as error: self.error(error)
+        self.audio.parameters = (self.output_settings(), self.scene.mode); self.sync()
+
+    def shape_params_changed(self, **updates):
+        if self.scene.shape is None or self.scene.shape.solid not in PARAMETRIC_SOLIDS: return
+        base = self.scene.shape.shape_params or default_shape_params(self.scene.shape.solid)
+        updated = replace(base, **updates)
+        try: self.scene.change('shape_params', updated)
+        except ValueError as error: self.error(error)
+        self.audio.parameters = (self.output_settings(), self.scene.mode); self.sync()
+
+    def update_scene_context(self):
+        """Keep the SCENE context banner synced with the active workspace, clip name/bars, and object."""
+        if not hasattr(self, 'scene_context_label'): return
+        shapes = self.scene.settings.shapes
+        if 0 <= self.scene.selected < len(shapes):
+            obj_summary = f'{self.scene.selected + 1:02}  ' + object_label(shapes[self.scene.selected])
+        else:
+            obj_summary = 'Empty scene'
+        if self.workspace == COMPOSER and self.project is not None and 0 <= self.clip_index < len(self.project.clips):
+            clip = self.project.clips[self.clip_index]
+            b0, b1 = Meter(self.project.meter_changes).bar_range(clip.start, clip.end)
+            cname = getattr(clip, 'name', '') or f'Clip {self.clip_index + 1}'
+            self.scene_context_label.setText(f'{cname} (Bars {b0}–{b1}) · {obj_summary}')
+        else:
+            self.scene_context_label.setText(f'SANDBOX · {obj_summary}')
+
+    def add_3d_turntable_to_selected(self):
+        if self.scene.shape is None: return False
+        return self.transform_panel.insert_recipe('3D Turntable', TRANSFORM_APPEND)
+
+    def apply_quick_add_entry(self, entry):
+        """Execute a chosen QuickAddEntry from the Quick Add palette."""
+        if entry is None: return False
+        self.show_panel(PANEL_SCENE)
+        if entry.action == 'object':
+            self.add_object(entry.payload)
+            return True
+        if entry.action == 'svg':
+            self.import_svg()
+            return True
+        if entry.action == 'parametric':
+            kind, name = entry.payload
+            return self.browser_add_equation('parametric', kind, name)
+        if entry.action == 'recurrence':
+            kind, name = entry.payload
+            return self.browser_add_equation('recurrence', kind, name)
+        if self.scene.shape is None:
+            return False
+        self.scene_sections.setCurrentIndex(1)
+        if entry.action == 'transform':
+            self.transform_panel.add(entry.payload)
+            return True
+        if entry.action == 'recipe':
+            return self.transform_panel.insert_recipe(entry.payload, TRANSFORM_APPEND)
+        if entry.action == 'saved_transform':
+            return self.transform_panel.insert_saved(entry.payload, TRANSFORM_APPEND)
+        return False
+
+    def open_quick_add(self, initial_filter=FILTER_ALL):
+        """Open the searchable Cmd/Ctrl+K Quick-Add palette."""
+        if self.building or self.desk3d: return False
+        self.function_panel.reload_presets()
+        self.recurrence_panel.reload_presets()
+        self.transform_panel.reload_saved()
+        entries = collect_entries(self.function_panel, self.recurrence_panel, self.transform_panel)
+        dialog = QuickAddDialog(entries, has_object=(self.scene.shape is not None),
+                                initial_filter=initial_filter, parent=self)
+        if self.run_dialog(dialog) == QDialog.DialogCode.Accepted and dialog.chosen is not None:
+            return self.apply_quick_add_entry(dialog.chosen)
+        return False
+
     def choose_midi_file(self):
         current = self.scene.settings.midi_file
         folder = str(Path(current).parent) if current else str(SCORE_FOLDER)
@@ -2699,11 +3257,14 @@ class Window(QMainWindow):
             blocker = QSignalBlocker(widget)
             items = [widget.item(i).text() for i in range(widget.count())] if widget is self.shape_list else [widget.itemText(i) for i in range(widget.count())]
             if items != labels: widget.clear(); widget.addItems(labels)
+        rows = min(max(len(settings.shapes), 3), 7)
+        self.shape_list.setFixedHeight(rows * 26 + 6)
         blocker = QSignalBlocker(self.shape_list)
         if self.shape_list.currentRow() != self.scene.selected: self.shape_list.setCurrentRow(self.scene.selected)
         effective = self.audition_shapes()
         for i, item_shape in enumerate(settings.shapes):
             item = self.shape_list.item(i)
+            item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDragEnabled) & ~Qt.ItemFlag.ItemIsDropEnabled)
             row = self.shape_list.itemWidget(item)
             if row is None:
                 item.setForeground(QColor('transparent'))  # The row's own caption draws the text.
@@ -2728,21 +3289,63 @@ class Window(QMainWindow):
         blocker = QSignalBlocker(self.transform_target); self.transform_target.setCurrentIndex(self.scene.selected)
         kind = shape.solid if shape is not None else None
         self.text_panel.setVisible(kind == TEXT_OBJECT)
+        self.matrix_panel.setVisible(kind == MATRIX_OBJECT)
+        if kind == MATRIX_OBJECT:
+            cfg = shape.matrix or MatrixConfig()
+            with QSignalBlocker(self.matrix_lang_a): self.matrix_lang_a.setCurrentText(cfg.language_a)
+            with QSignalBlocker(self.matrix_lang_b): self.matrix_lang_b.setCurrentText(cfg.language_b)
+            if self.matrix_sample_a.text() != cfg.sample_a:
+                with QSignalBlocker(self.matrix_sample_a): self.matrix_sample_a.setText(cfg.sample_a)
+            if self.matrix_sample_b.text() != cfg.sample_b:
+                with QSignalBlocker(self.matrix_sample_b): self.matrix_sample_b.setText(cfg.sample_b)
+            with QSignalBlocker(self.matrix_cols): self.matrix_cols.setValue(cfg.columns)
+            with QSignalBlocker(self.matrix_rows): self.matrix_rows.setValue(cfg.rows)
+            for key, widget in self.matrix_fields.items(): widget.set_param(getattr(cfg, key))
+        show_sp = kind in PARAMETRIC_SOLIDS
+        self.shape_params_panel.setVisible(show_sp)
+        if show_sp:
+            sp = shape.shape_params or default_shape_params(kind)
+            self.sp_star_box.setVisible(kind in STAR_SOLIDS)
+            self.sp_gear_box.setVisible(kind in GEAR_SOLIDS)
+            self.sp_radar_box.setVisible(kind == RADAR_SOLID)
+            self.sp_clock_box.setVisible(kind == CLOCK_SOLID)
+            if kind in STAR_SOLIDS:
+                with QSignalBlocker(self.sp_star_points): self.sp_star_points.setValue(sp.points)
+                self.sp_star_inner.setValue(sp.inner_radius)
+            elif kind in GEAR_SOLIDS:
+                with QSignalBlocker(self.sp_gear_teeth): self.sp_gear_teeth.setValue(sp.teeth)
+                self.sp_gear_depth.setValue(sp.tooth_depth)
+            elif kind == RADAR_SOLID:
+                self.sp_radar_speed.setValue(sp.sweep_speed)
+            elif kind == CLOCK_SOLID:
+                self.sp_clock_speed.setValue(sp.clock_speed)
+                with QSignalBlocker(self.sp_clock_hour): self.sp_clock_hour.setValue(int(round(sp.start_hour)))
+                with QSignalBlocker(self.sp_clock_min): self.sp_clock_min.setValue(int(round(sp.start_minute)) % 60)
         self.function_panel.setVisible(kind == PARAMETRIC_OBJECT)
         reserved = {v.name for v in shape.transform_variables} if shape is not None else set()  # Object variables (T5).
         self.function_panel.reserved = self.recurrence_panel.reserved = reserved
+        has_3d_rot = shape is not None and (
+            any(t.enabled and t.kind in ('Rotate', 'Spin') for t in shape.transforms)
+            or bool(shape.rotation_x or shape.rotation_y or shape.spin_x or shape.spin_y)
+        )
         if kind == PARAMETRIC_OBJECT: self.function_panel.set_plot(shape.plot)
+        self.function_panel.set_has_3d_rotation(has_3d_rot)
         self.recurrence_panel.setVisible(kind == RECURRENCE_OBJECT)
         if kind == RECURRENCE_OBJECT: self.recurrence_panel.set_plot(shape.recurrence)
+        self.recurrence_panel.set_has_3d_rotation(has_3d_rot)
         self.edit_shape_button.setVisible(kind == CUSTOM_OBJECT)
         self.empty_note.setVisible(shape is None); self.transform_hint.setVisible(shape is not None)
+        self.placement_panel.setVisible(shape is not None)
+        self.transform_panel.set_target_solid(kind or '')
         self.transform_panel.set_stack(shape.transforms if shape is not None else ())
+        self.update_scene_context()
         self.transform_panel.set_audition(shape.stack_bypassed if shape else False,
             self.transform_solos.get(object_id(shape, self.scene.selected)) if shape else None)
         self.transform_panel.set_animation(shape)
         self.transform_panel.set_variables(shape.transform_variables if shape is not None else (),
                                            equation_variables(shape) if shape is not None else {},
-                                           (shape.path_start, shape.path_trace) if shape is not None else None)
+                                           (shape.path_start, shape.path_trace) if shape is not None else None,
+                                           shape.matrix if shape is not None and shape.solid == MATRIX_OBJECT else None)
         self.path_panel.setVisible(shape is not None)
         if shape is not None:
             for key,widget in self.path_fields.items(): widget.set_param(getattr(shape,key))
@@ -2752,6 +3355,9 @@ class Window(QMainWindow):
         if shape is None and self.scene_sections.currentIndex() == 1: self.scene_sections.setCurrentIndex(0)
         self.audio.parameters = (self.output_settings(),self.scene.mode)
         if self.audio.composer is not None: self.audio.composer = (self.output_project(), self.play_start)
+        self.sync_solo_pill()
+        if getattr(self, 'desk3d_host', None) is not None:
+            self.desk3d_host.controller.refresh()
         self.update_title()
 
     # Automation (Composer): gain lanes edited in the timeline's transform roll ----------
@@ -2792,6 +3398,7 @@ class Window(QMainWindow):
         self.transform_panel.set_automation(composer); self.function_panel.set_automation(composer)
         self.recurrence_panel.set_automation(composer)
         for widget in self.path_fields.values(): widget.automation_allowed = composer
+        for widget in self.matrix_fields.values(): widget.automation_allowed = composer
         clip = self.project.clips[self.clip_index] if composer else None
         for key in ('position_x','position_y','shape_size'):
             on = composer and shape is not None and bool(lane_points(shape.lanes,key))
@@ -3284,6 +3891,7 @@ class Window(QMainWindow):
             self.monitor_window.hide()
         for host in self.hosts(): host.release_phosphor()
         if self.builder is not None: self.builder.preview.release_phosphor()
+        if self.desk3d_host is not None: self.desk3d_host.release_phosphor()
 
     def flush_manual_geometry(self):
         """Write the manual window's place now if a debounced save is still pending (quit)."""
@@ -3550,6 +4158,8 @@ class Window(QMainWindow):
             for control in (self.brightness_control,self.monitor_brightness):
                 if control.value != self.preferences['beam_intensity']: control.setValue(self.preferences['beam_intensity'])
                 control.setEnabled(self.host.phosphor is not None and self.preferences['phosphor'] != PHOSPHOR_OFF)
+        if getattr(self, 'desk3d_host', None) is not None:
+            self.desk3d_host.sync_quality()
         self.restyle(theme)
 
     def restyle(self, theme):
@@ -3567,11 +4177,45 @@ class Window(QMainWindow):
                     splitter.handle(index).set_theme(theme)
             timeline.update()
         self.style_hosts()  # Every time: a pop-out host created later must not keep Qt's white default.
+        if hasattr(self, 'stage'):
+            self.stage.set_vintage(theme.style == themes.VINTAGE, PALETTES[self.preferences['palette']]['trace'])
+        if hasattr(self, 'app_bar') and hasattr(self.app_bar, 'set_vintage'):
+            self.app_bar.set_vintage(theme.style == themes.VINTAGE)
         if hasattr(self, 'transform_panel'):
             self.transform_panel.noise_spectrum.theme = theme
             self.transform_panel.noise_spectrum.update()
         previous = getattr(self,'_styled_theme',None)
         if previous is theme: return
+        app = QApplication.instance()
+        if app is not None:
+            from PySide6.QtGui import QBrush
+            from PySide6.QtWidgets import QStyleFactory
+            from phosphor.editor.vintage_style import VintageProxyStyle, plastic_tile, aluminum_tile
+            if not app.property('phosphorBaseStyle'):
+                app.setProperty('phosphorBaseStyle', app.style().objectName())
+                app.setProperty('phosphorBasePalette', app.palette())
+            if theme.style == themes.VINTAGE:
+                if not isinstance(app.style(), VintageProxyStyle):
+                    app.setStyle(VintageProxyStyle(app.property('phosphorBaseStyle')))
+                pal = QPalette(app.property('phosphorBasePalette') or app.palette())
+                pal.setBrush(QPalette.ColorRole.Window, QBrush(plastic_tile()))
+                pal.setColor(QPalette.ColorRole.WindowText, QColor(theme.colors['fg']))
+                pal.setColor(QPalette.ColorRole.ButtonText, QColor(theme.colors['fg']))
+                pal.setColor(QPalette.ColorRole.Base, QColor('#131c14'))
+                pal.setColor(QPalette.ColorRole.Text, QColor('#8ff08a'))
+                app.setPalette(pal)
+                bar_pal = QPalette(pal)
+                bar_pal.setBrush(QPalette.ColorRole.Window, QBrush(aluminum_tile()))
+                self.app_bar.setAutoFillBackground(True)
+                self.app_bar.setPalette(bar_pal)
+            elif isinstance(app.style(), VintageProxyStyle):
+                base = QStyleFactory.create(app.property('phosphorBaseStyle') or 'Fusion')
+                if base is not None: app.setStyle(base)
+                base_pal = app.property('phosphorBasePalette')
+                if base_pal is not None:
+                    app.setPalette(base_pal)
+                    self.app_bar.setAutoFillBackground(False)
+                    self.app_bar.setPalette(base_pal)
         p = theme.colors
         arrows = self.spin_arrow_images(p)
         # Without images (unwritable temp folder) the buttons still work, shown as plain bars.
@@ -3686,16 +4330,26 @@ class Window(QMainWindow):
         sweeps stay blanked while the whole frame is deposited in one call.
         """
         self.sweep.configure(self.sweep_trigger,self.sweep_edge,self.sweep_window_ms,rate)
-        return self.sweep.traces(np.asarray(samples,dtype=np.float32),scope.width(),scope.height(),self.visualization_gain,self.sweep_separation)
+        arr = np.asarray(samples, dtype=np.float32)
+        if self.desk3d and self.desk3d_host is not None and arr.ndim == 2 and arr.shape[1] >= 2:
+            arr = self.desk3d_host.controller.route_signal(arr)
+        return self.sweep.traces(arr,scope.width(),scope.height(),self.visualization_gain,self.sweep_separation)
 
-    def update_phosphor(self, new_frames, elapsed, traces=None):
+    def update_phosphor(self, new_frames, elapsed, traces=None, *, raw_signal=None, gain=1., decay_elapsed=None):
         if self.exporting: return
         from phosphor.display.frame_step import step_display
         layer = self.host.phosphor
-        step_display(self.host, self.preferences, self.host.scope.signal, new_frames, elapsed,
+        prefs = (self.desk3d_host.controller.crt_prefs(self.preferences)
+                 if self.desk3d and self.desk3d_host is not None else self.preferences)
+        step_display(self.host, prefs, self.host.scope.signal, new_frames, elapsed,
                      traces=traces, video=bool(self.video_monitor and layer is not None and layer.video is not None),
                      video_gain=field_gain(elapsed), scan_lines=self.video_panel.scan_lines,
-                     line_width=LINE_WIDTH, video_monitor=self.video_monitor)
+                     line_width=LINE_WIDTH, video_monitor=self.video_monitor,
+                     raw_signal=raw_signal, gain=gain, decay_elapsed=decay_elapsed)
+        if self.desk3d and self.desk3d_host is not None:
+            self.desk3d_host.controller.update_crt_light(
+                self.host.scope.signal, traces=traces, elapsed=elapsed
+            )
 
     def spin_arrow_images(self, p):
         # Stylesheets cannot draw triangles, so write palette-coloured images for them.
@@ -3714,7 +4368,7 @@ class Window(QMainWindow):
                 path = self._arrow_directory.filePath(f'{name}{suffix}_{color.lstrip("#")}.png')
                 if not image.save(path): return None
                 paths[name+suffix] = path.replace('\\','/')
-        if self.theme.style == themes.MODERN:
+        if self.theme.style in (themes.MODERN, themes.VINTAGE):
             chevron = ((2, 2), (9, 9), (16, 2))
             for name, points, size, color in (
                     ('chevron', chevron, (18, 12), p['fg']),
@@ -3888,7 +4542,12 @@ class Window(QMainWindow):
             if last is None or np.any(last != point): self.reveal_handles()
             return False
         self.reveal_handles()
-        if kind == 'release': self.drag = None; return True
+        if kind == 'release':
+            self.drag = None
+            if getattr(self, '_drag_sync_pending', False):
+                self._drag_sync_pending = False
+                self.sync()
+            return True
         if kind == 'press':
             self.drag = None
             if self.scene.mode == 'music' or self.scene.settings.drawing_gain <= 0: return False
@@ -3903,10 +4562,21 @@ class Window(QMainWindow):
             kind,start,shape,pixels = self.drag
             delta = point-start
             if kind == 'move':
-                self.scene.change('position_x',float(shape.position_x+delta[0]/pixels))
-                self.scene.change('position_y',float(shape.position_y-delta[1]/pixels))
-            else: self.scene.change('shape_size',float(max(.05,shape.shape_size+(delta[0]-delta[1])/(2*pixels))))
-            self.sync()
+                px = float(shape.position_x+delta[0]/pixels)
+                py = float(shape.position_y-delta[1]/pixels)
+                self.scene.change('position_x',px)
+                self.scene.change('position_y',py)
+                for key, val in (('position_x', px), ('position_y', py)):
+                    w = self.parameters.get(key)
+                    if w is not None:
+                        with QSignalBlocker(w): w.setValue(val)
+            else:
+                sz = float(max(.05,shape.shape_size+(delta[0]-delta[1])/(2*pixels)))
+                self.scene.change('shape_size',sz)
+                w = self.parameters.get('shape_size')
+                if w is not None:
+                    with QSignalBlocker(w): w.setValue(sz)
+            self._drag_sync_pending = True
         return True
 
     def stopped_signal(self, settings):
@@ -3955,15 +4625,17 @@ class Window(QMainWindow):
         effective = self.audition_shapes()
         self.inspector.observe(seconds, seconds if motion_seconds is None else motion_seconds)
         if self.scene.mode != 'music':
-            moving=iter(posed_shapes(self.scene.settings.shapes,seconds if motion_seconds is None else motion_seconds))
+            # Posed from the audition copies, so a transform solo is applied before the On/Off
+            # lanes resolve and the outline draws the stack the audio plays (B2 review).
+            moving=iter(posed_shapes(effective,seconds if motion_seconds is None else motion_seconds))
             off = self.lane_off_objects(seconds if motion_seconds is None else motion_seconds)
             for i,base in enumerate(self.scene.settings.shapes):
                 shape=base if is_motion_guide(base) else next(moving)
                 if (effective[i].muted or i in off) and not is_motion_guide(shape):
-                    raw, edges, _ = shape_geometry(shape)
-                    points, _ = posed_object(seconds, replace(shape, transforms=effective[i].transforms), vertices=raw)
-                    points = (points*shape.shape_size+[shape.position_x, shape.position_y])*[scale,-scale]+[w/2,h/2]
-                    if len(edges): faint.append(stroke_edges(points, edges, .7))  # One pass for every edge (audit P3).
+                    cache = getattr(self, '_muted_outline_cache', None)
+                    if cache is None: cache = self._muted_outline_cache = {}
+                    tris = muted_outline(cache, seconds, shape, w, h, scale)
+                    if len(tris): faint.append(tris)
                 if shape.solid==CUSTOM_OBJECT and shape.custom.guides:
                     from phosphor.engine.drawing_motion import segment_indices
                     from phosphor.engine.motion_path import guide_route
@@ -3983,8 +4655,7 @@ class Window(QMainWindow):
                 cr = np.clip(corner,[20,20],[max(20,w-20),max(20,h-20)])
                 self.handles.append((i,ch,cr))  # Picking works while they are hidden.
                 if shown <= 0: continue
-                angles = np.linspace(0,2*np.pi,20)
-                handles.append(stroke_triangles(ch+np.column_stack([np.cos(angles),np.sin(angles)])*6,1.5))
+                handles.append(_HANDLE_RING + ch.astype(np.float32))
                 if i == self.scene.selected:
                     from phosphor.editor.builder_selection import dashed_lines
                     box = center+np.array([[-r,-r],[r,-r],[r,r],[-r,r],[-r,-r]])
@@ -3992,14 +4663,14 @@ class Window(QMainWindow):
                     # object costs no more than one around the whole view (Codex review, UI1).
                     box = np.clip(box,[-20,-20],[w+20,h+20])
                     handles.extend(stroke_triangles(line,.6) for line in dashed_lines(box))
-                    handles.append(stroke_triangles(cr+np.array([[-6,-6],[6,-6],[6,6],[-6,6],[-6,-6]]),1.5))
+                    handles.append(_CORNER_BOX + cr.astype(np.float32))
         p = self.theme.colors
         layers = [(np.concatenate(strips) if strips else np.empty((0,2)),QColor(p['accent']))]
         if faint:
             colour = QColor(p['accent']); colour.setAlphaF(.22)
-            layers.append((np.concatenate(faint), colour))
+            layers.append((faint[0] if len(faint) == 1 else np.concatenate(faint), colour))
         handle_colour = QColor(p['accent']); handle_colour.setAlphaF(HANDLE_DIM*shown)
-        handle_layer = (np.concatenate(handles) if handles else np.empty((0,2)), handle_colour)
+        handle_layer = (handles[0] if len(handles) == 1 else np.concatenate(handles) if handles else np.empty((0,2)), handle_colour)
         if self.scene.shape is None: scope.overlays = layers+[handle_layer]+self.inspector.layers(w,h,scale,p); return
         pose_time = np.floor(seconds*self.scene.settings.drawing_hz)/self.scene.settings.drawing_hz
         try:  # Orientation key: where the stack sends unit axes from the origin (exact for linear steps).
@@ -4008,13 +4679,10 @@ class Window(QMainWindow):
             length = np.linalg.norm(axes,axis=1,keepdims=True); axes = np.where(length>1,axes/np.maximum(length,1e-12),axes)
         except ValueError: axes = projected_solid(pose_time,self.scene.shape,vertices=np.eye(3),include_depth=True)
         origin = np.array([65.,h-65.])
-        # Small vector X/Y/Z glyphs keep the entire orientation key on the GPU.
-        glyphs = [([[0,0],[6,8]],[[6,0],[0,8]]),([[0,0],[3,4],[6,0]],[[3,4],[3,8]]),([[0,0],[6,0],[0,8],[6,8]],)]
         for i in range(3):
             end = origin+axes[i,:2]*[39,-39]
-            pieces = [stroke_triangles([origin,end],2)]
-            label = end+[5,-5]
-            pieces.extend(stroke_triangles(label+np.array(line),1.5) for line in glyphs[i])
+            label = (end+[5,-5]).astype(np.float32)
+            pieces = (stroke_triangles([origin,end],2), _AXIS_GLYPHS[i] + label)
             colour = QColor(self.theme.colors[('axis_x','axis_y','axis_z')[i]]); colour.setAlphaF(AXIS_OPACITY)
             layers.append((np.concatenate(pieces),colour))
         layers.append(handle_layer)  # Above the axes (UI1: its own layer, so it fades alone).
@@ -4133,42 +4801,44 @@ class Window(QMainWindow):
         if midi.port_name and now-self.last_midi > 2: self.last_midi = now; midi.check_port_async()
         if now-self.last_status > .2:
             self.last_status = now
-            self.play_button.setText('Stop' if self.audio.running and not self.audio.cycle and not self.audio.preview else 'Play')
+            play_text = 'Stop' if self.audio.running and not self.audio.cycle and not self.audio.preview else 'Play'
             exporting_video = self.exporting and hasattr(self, 'video_export_job') and not self.video_export_job.closed
-            self.status.setText((('EXPORTING VIDEO…  |  ' if exporting_video else 'EXPORTING AUDIO…  |  ') if self.exporting else '')+('Cycle audition' if self.audio.cycle_running else 'Previewing a file' if self.audio.preview_running else 'Playing' if self.audio.running else 'Audio stopped')+f'  |  {self.audio.sample_rate/1000:g} kHz stereo XY  |  Underruns: {self.audio.underruns}'+('  |  '+self.audio.notice if self.audio.notice and self.audio.running else '')+('  |  '+self.audio.error if self.audio.error else ''))
+            status_text = (('EXPORTING VIDEO…  |  ' if exporting_video else 'EXPORTING AUDIO…  |  ') if self.exporting else '')+('Cycle audition' if self.audio.cycle_running else 'Previewing a file' if self.audio.preview_running else 'Playing' if self.audio.running else 'Audio stopped')+f'  |  {self.audio.sample_rate/1000:g} kHz stereo XY  |  Underruns: {self.audio.underruns}'+('  |  '+self.audio.notice if self.audio.notice and self.audio.running else '')+('  |  '+self.audio.error if self.audio.error else '')
             if self.audio.running and self.audio.live:
-                self.status.setText(self.status.text()+f'  |  MIDI buffer: {self.audio.block_frames} frames · device latency: {self.audio.output_latency*1000:.1f} ms'+(f' · {self.audio.output_mode}' if self.audio.output_mode else ''))
-            if getattr(self,'redraw_notice',''):self.status.setText(self.status.text()+'  |  '+self.redraw_notice)
-            if self.workspace == COMPOSER: self.status.setText('COMPOSER  |  '+self.status.text())
-            notice = getattr(self,'notice',None)
-            if notice and now < notice[1]: self.status.setText(notice[0]+'  |  '+self.status.text())
-            self.midi_status.setText(f'{"RECORDING — " if midi.capture else ""}{midi.port_name or "MIDI not connected"}\nVoices: {midi.voice_count}/8\n{midi.notice}\n{midi.last_message}')
+                status_text += f'  |  MIDI buffer: {self.audio.block_frames} frames · device latency: {self.audio.output_latency*1000:.1f} ms'+(f' · {self.audio.output_mode}' if self.audio.output_mode else '')
+            if getattr(self,'redraw_notice',''): status_text += '  |  '+self.redraw_notice
+            if self.workspace == COMPOSER: status_text = 'COMPOSER  |  '+status_text
+            midi_text = f'{"RECORDING — " if midi.capture else ""}{midi.port_name or "MIDI not connected"}\nVoices: {midi.voice_count}/8\n{midi.notice}\n{midi.last_message}'
+            if self.midi_status.text() != midi_text: self.midi_status.setText(midi_text)
             if self.system_monitor:
                 c = self.capture
-                self.play_button.setText('Stop' if c.running else 'Start')
+                play_text = 'Stop' if c.running else 'Start'
                 self.capture_devices.setEnabled(not c.running)
                 self.capture_refresh.setEnabled(not c.running and not self.capture_scanning)
                 waiting = c.ready and (c.clock()-c.last_sample > c.STALE_SECONDS or c.peak < 1e-6)
                 state = 'Waiting for audio / silence' if waiting else 'Visualizing' if c.ready else 'Starting capture…' if c.running else 'Capture stopped'
                 details = f'{c.device_name}\n{c.sample_rate} Hz · {c.channels} channel(s) · {c.frames} captured frames\nRaw input peak: {0. if waiting else c.peak:.4f}\nCapture status events: {c.status_events}' if c.device_name else ''
-                self.capture_status.setText(c.error or self.capture_notice or details)
-                self.status.setText(f'SYSTEM AUDIO · VISUALIZATION ONLY  |  {state}'+('  |  '+c.error if c.error else ''))
+                capture_text = c.error or self.capture_notice or details
+                if self.capture_status.text() != capture_text: self.capture_status.setText(capture_text)
+                status_text = f'SYSTEM AUDIO · VISUALIZATION ONLY  |  {state}'+('  |  '+c.error if c.error else '')
             if self.video_monitor:
                 v = self.video
                 playing = v is not None and v.playing
-                self.play_button.setText('Pause' if playing else 'Play')
+                play_text = 'Pause' if playing else 'Play'
                 if v is None or v.player.source().isEmpty(): state = 'No video loaded'
                 else:
                     position, duration = v.player.position(), v.player.duration()
                     size = v.size_text()
                     state = ('Playing' if playing else 'Paused')+f'  |  {clock(position)} / {clock(duration)}'+(f'  |  {size}' if size else '')
-                self.status.setText(f'VIDEO · {self.video_panel.scan_lines}-LINE RASTER  |  {state}'+('  |  '+v.error if v is not None and v.error else ''))
+                status_text = f'VIDEO · {self.video_panel.scan_lines}-LINE RASTER  |  {state}'+('  |  '+v.error if v is not None and v.error else '')
+            if self.play_button.text() != play_text: self.play_button.setText(play_text)
+            if self.status.text() != status_text: self.status.setText(status_text)
             # Presented frames (swaps), not preparation starts: a GUI thread blocked in paint still
             # starts frames on time, but the scope stops updating (audit B11).
             recent = [stamp for stamp in self.content_swap_times if now-stamp <= 1.]
             fps = (len(recent)-1)/(recent[-1]-recent[0]) if len(recent) > 1 else 0.
-            self.backend_label.setText(f'{fps:.0f} fps · '+self.backend)
-            self.status.setToolTip(self.status.text()); self.backend_label.setToolTip(self.backend_label.text())
+            backend_text = f'{fps:.0f} fps · '+self.backend
+            if self.backend_label.text() != backend_text: self.backend_label.setText(backend_text)
             self.refresh_bar_icons()
         if display and self.preferences['display_rate'] == '60 Hz':
             if not self.frame_timer.isActive(): self.schedule_frame()
@@ -4190,6 +4860,9 @@ class Window(QMainWindow):
 
     def _display_frame(self, now):
         flush_sliders()  # At most one edit per dragged slider per frame.
+        if getattr(self, '_drag_sync_pending', False):
+            self._drag_sync_pending = False
+            self.sync()
         start = time.perf_counter(); settings = self.output_settings()
         self.update_cycle(settings)
         if settings.sample_rate != self.audio.sample_rate:
@@ -4197,7 +4870,9 @@ class Window(QMainWindow):
         sweeping = self.sweep_mode and not self.video_monitor
         sweep_samples = None  # New samples for the time view of a generated signal.
         seconds = now-self.started
-        elapsed = min(.25,max(0.,start-getattr(self,'last_phosphor_time',start))); self.last_phosphor_time = start
+        # Samples use at most 250 ms after a stall; the phosphor decays the whole of it.
+        decay_elapsed = max(0.,start-getattr(self,'last_phosphor_time',start)); self.last_phosphor_time = start
+        elapsed = min(.25,decay_elapsed)
         new_frames = elapsed*settings.sample_rate
         if not self.audio.running:settings=replace(settings,motion_time_offset=self.started-self.motion_epoch)
         if self.system_monitor:
@@ -4251,15 +4926,20 @@ class Window(QMainWindow):
             signal = np.zeros((2,2))  # The raster replaces the beam path.
             self.video_panel.refresh()
         if self.scene.shape is not None and self.scene.shape.solid == RECURRENCE_OBJECT:
-            warning_settings, warning_seconds = settings, seconds
-            if self.workspace == COMPOSER:
-                clip = self.project.clips[self.clip_index]
-                warning_settings = clip_settings(clip, settings, self.project)
+            composer = self.workspace == COMPOSER
+            clip = self.project.clips[self.clip_index] if composer else None
+            if composer:
                 origin = float(self.project.seconds(clip.start-clip.time_offset)) if clip.local_time else 0.
                 warning_seconds = max(0., self.playhead-origin)
+            else:
+                warning_seconds = seconds
             pose_seconds = math.floor(max(0., warning_seconds)*settings.drawing_hz)/settings.drawing_hz
-            self.recurrence_panel.update_warning(pose_seconds, warning_settings.tempo,
-                warning_settings.shapes[self.scene.selected].recurrence)
+            rec_key = (self.workspace, clip, self.scene.selected, pose_seconds, settings.tempo, self.scene.shape.recurrence)
+            if rec_key != getattr(self, '_recurrence_warning_key', None):
+                self._recurrence_warning_key = rec_key
+                warning_settings = clip_settings(clip, settings, self.project) if composer else settings
+                self.recurrence_panel.update_warning(pose_seconds, warning_settings.tempo,
+                    warning_settings.shapes[self.scene.selected].recurrence)
         stopped_song = self.workspace == COMPOSER and (not self.audio.running or self.audio.cycle) and not self.system_monitor and not self.video_monitor
         feed = None
         if signal is None:
@@ -4279,32 +4959,58 @@ class Window(QMainWindow):
             sweep_samples = np.take(signal,(first+np.arange(count))%len(signal),axis=0) if count > 0 and len(signal) else np.empty((0,2))
             feed = (first+count)%max(1,len(signal))
         self.sweep_feed = feed
+        if self.building:
+            preview = self.builder.preview.scope
+            trace = interpolate_trace(signal, self.preferences['trace_interpolation'])
+            preview.signal = trace if self.video_monitor else trace*self.visualization_gain
+            preview.colors = PALETTES[self.preferences['palette']]
+            preview.glow = self.preferences['crt_glow']
+            preview.scanlines = self.preferences['crt_scanlines'] and not self.video_monitor
+            preview.divisions = self.preferences['grid_divisions']
+            preview.show_grid = self.preferences['show_grid'] and not self.video_monitor
+            preview.grid_style = self.preferences['grid_style']
+            preview.graphics_quality = self.preferences['graphics_quality']
+            preview.overlays = []
+            for key in VISUAL_DEFAULTS: setattr(preview, key, self.preferences[key])
+            bg = QColor(preview.colors['background'])
+            if self.builder.preview.view.color() != bg: self.builder.preview.view.setColor(bg)
+            preview.update()
+            btn_text = '■ STOP AUDIO' if self.audio.running else '▶ PLAY AUDIO'
+            if self.builder.play_button.text() != btn_text: self.builder.play_button.setText(btn_text)
+            self.prep_ms.append((time.perf_counter()-start)*1000)
+            return
         scope = self.host.scope
-        trace = interpolate_trace(signal,self.preferences['trace_interpolation'])
-        scope.signal = trace if self.video_monitor else trace*self.visualization_gain  # Display gain, every input but video.
+        phosphor_on = self.host.phosphor is not None and self.preferences['phosphor'] != PHOSPHOR_OFF
+        desk_route = (self.desk3d_host.controller.route_signal
+                      if self.desk3d and self.desk3d_host is not None and not self.video_monitor else None)
+        if phosphor_on and not sweeping and not self.video_monitor and not self.system_monitor:
+            # Phosphor mode deposits only the newest tail; skip full-buffer Catmull-Rom interpolation.
+            sig_scaled = signal if desk_route is None else desk_route(signal)
+            scope.signal = sig_scaled if self.visualization_gain == 1. else sig_scaled * self.visualization_gain
+            raw_signal = sig_scaled
+        else:
+            trace = interpolate_trace(signal,self.preferences['trace_interpolation'])
+            if self.video_monitor:
+                scope.signal = trace
+            else:
+                trace_scaled = trace if desk_route is None else desk_route(trace)
+                scope.signal = trace_scaled * self.visualization_gain  # Display gain, every input but video.
+            raw_signal = None
         if sweeping and self.system_monitor: traces = self.sweep_traces(scope,*self.captured_sweep_samples())
         elif sweeping: traces = self.sweep_traces(scope,sweep_samples if sweep_samples is not None else np.empty((0,2)),settings.sample_rate)
         else: traces = None
         if not (sweeping and self.system_monitor): self.sweep_frame = None
         # The line trace draws the whole sweep buffer; the phosphor deposits only new paths.
-        phosphor_on = self.host.phosphor is not None and self.preferences['phosphor'] != PHOSPHOR_OFF
         scope.polylines = self.sweep.display_polylines(scope.width(),scope.height(),self.visualization_gain,self.sweep_separation) if sweeping and not phosphor_on else None
         scope.colors = PALETTES[self.preferences['palette']]
-        scope.glow = self.preferences['crt_glow']; scope.scanlines = self.preferences['crt_scanlines'] and not self.video_monitor; scope.divisions = self.preferences['grid_divisions']; scope.show_grid = self.preferences['show_grid'] and not self.video_monitor
+        scope.glow = self.preferences['crt_glow']; scope.scanlines = self.preferences['crt_scanlines'] and not self.video_monitor; scope.divisions = self.preferences['grid_divisions']; scope.show_grid = self.preferences['show_grid'] and not self.video_monitor; scope.grid_style = self.preferences['grid_style']; scope.graphics_quality = self.preferences['graphics_quality']
         for key in VISUAL_DEFAULTS: setattr(scope,key,self.preferences[key])
         scope.history_key = (self.system_monitor,self.video_monitor,sweeping,self.audio.running,self.scene.settings.source,self.scene.mode,self.capture.device_name,self.workspace)
-        self.update_phosphor(new_frames,elapsed,traces)
+        self.update_phosphor(new_frames,elapsed,traces,raw_signal=raw_signal,gain=self.visualization_gain,decay_elapsed=decay_elapsed)
         if self.system_monitor or self.video_monitor or self.immersive or self.popped:
             scope.overlays = []; self.handles = []
         else: self.overlay(seconds,seconds+settings.motion_time_offset)
         scope.update()
-        if self.building:
-            preview=self.builder.preview.scope
-            preview.signal=scope.signal;preview.colors=scope.colors;preview.glow=scope.glow
-            preview.scanlines=scope.scanlines;preview.divisions=scope.divisions;preview.show_grid=scope.show_grid;preview.overlays=[]
-            for key in VISUAL_DEFAULTS:setattr(preview,key,getattr(scope,key))
-            self.builder.preview.view.setColor(QColor(scope.colors['background']));preview.update()
-            self.builder.play_button.setText('■ STOP AUDIO' if self.audio.running else '▶ PLAY AUDIO')
         self.prep_ms.append((time.perf_counter()-start)*1000)
 
 

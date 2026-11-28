@@ -1,4 +1,5 @@
 """Immutable beat-based gain lanes, shared by transforms and equation variables."""
+from bisect import bisect_right
 from collections import OrderedDict
 import math
 from threading import Lock
@@ -66,9 +67,19 @@ def validate_lanes(lanes, allowed_fields, label):
         previous = name
 
 
+_validated_points = OrderedDict()
+_validated_lock = Lock()
+
+
 def validate_points(points, label):
     if not isinstance(points, tuple) or len(points) > MAX_POINTS:
         raise ValueError(f'{label}: use a tuple of at most {MAX_POINTS} gain points.')
+    if not points:
+        return
+    key = id(points)
+    with _validated_lock:
+        if _validated_points.get(key) is points:
+            return
     previous = -1.
     same_beat = 0
     for point in points:
@@ -91,6 +102,10 @@ def validate_points(points, label):
         if any(not GAIN_RANGE[0] <= h <= GAIN_RANGE[1] for h in point[3:]):
             raise ValueError(f'{label}: handle gains must be in range.')
         previous = beat
+    with _validated_lock:
+        _validated_points[key] = points
+        _validated_points.move_to_end(key)
+        if len(_validated_points) > 4096: _validated_points.popitem(last=False)
 
 
 _lanes = OrderedDict()
@@ -102,14 +117,16 @@ def _build_arrays(points):
               np.array([p[1] for p in points], dtype=float),
               np.array([p[2] == 'linear' for p in points]),
               np.array([p[2] == 'curve' for p in points]),
-              np.array([p[3] if p[2] == 'curve' else p[1] for p in points]),
-              np.array([p[4] if p[2] == 'curve' else p[1] for p in points]))
+              np.array([p[3] if p[2] == 'curve' else p[1] for p in points], dtype=float),
+              np.array([p[4] if p[2] == 'curve' else p[1] for p in points], dtype=float))
     for array in arrays: array.setflags(write=False)
     return arrays
 
 
-def _lane_arrays(points):
-    if not isinstance(points, tuple): return _build_arrays(points)
+def _lane_entry(points):
+    if not isinstance(points, tuple):
+        arrays = _build_arrays(points)
+        return arrays, tuple(tuple(a.tolist()) for a in arrays)
     key = id(points)
     with _lanes_lock:
         entry = _lanes.get(key)
@@ -117,14 +134,46 @@ def _lane_arrays(points):
             _lanes.move_to_end(key)
             return entry[1]
     arrays = _build_arrays(points)
+    built = (arrays, tuple(tuple(a.tolist()) for a in arrays))
     with _lanes_lock:
-        _lanes[key] = (points, arrays)
+        _lanes[key] = (points, built)
         _lanes.move_to_end(key)
         if len(_lanes) > 4096: _lanes.popitem(last=False)
-    return arrays
+    return built
+
+
+def _lane_arrays(points):
+    return _lane_entry(points)[0]
 
 
 def gain_at(points, clock, t):
+    if isinstance(t, (int, float, np.floating, np.integer)):
+        if not points or not clock:
+            return float(points[0][1]) if points else 1.
+        tf = float(t)
+        beat = float(clock.beats(tf)) if hasattr(clock, 'beats') else (tf - clock[1]) / clock[0]
+        nodes_t, gains_t, linear_t, curved_t, h1_t, h2_t = _lane_entry(points)[1]
+        last = len(nodes_t) - 1
+        idx = bisect_right(nodes_t, beat) - 1
+        if idx < 0: idx = 0
+        elif idx > last: idx = last
+        right = idx + 1 if idx < last else last
+        span = nodes_t[right] - nodes_t[idx]
+        g0 = gains_t[idx]
+        if span <= 0.:
+            return g0
+        u = (beat - nodes_t[idx]) / span
+        if u < 0.: u = 0.
+        elif u > 1.: u = 1.
+        if curved_t[idx]:
+            # Bit-identical to the array path below: NumPy computes (1-u)**3 and u**3 with C pow
+            # (as Python's float ** does) but (1-u)**2 as a square (om*om; Python's ** 2 calls pow,
+            # which can differ by an ulp). Keep the operation order (test_automation_parity).
+            om = 1 - u
+            return om**3*g0 + 3*(om*om)*u*h1_t[idx] + 3*om*u*u*h2_t[idx] + u**3*gains_t[right]
+        if linear_t[idx]:
+            return g0 + u * (gains_t[right] - g0)
+        return g0
     times = np.asarray(t, dtype=float)
     if not points or not clock:
         result = np.full(times.shape, points[0][1] if points else 1., dtype=float)

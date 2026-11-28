@@ -1,5 +1,6 @@
 """Best-guess chord labels and sounding pitches for the Composer roll (no Qt)."""
 from functools import lru_cache
+import numpy as np
 
 from phosphor.audio.score_source import NOTE_NAMES
 from phosphor.engine.composition import chord_voices
@@ -54,6 +55,14 @@ def _chord_name(pitches):
 def sounding_pitches(notes, beat, voices=None):
     """Sorted allocated pitches at beat, excluding glide partners and stolen voices."""
     voices = chord_voices(tuple(notes)) if voices is None else voices
-    # Vectorized (the roll asks on every display frame during playback): the same comparisons.
-    sounding = (voices.start <= beat) & (beat < voices.end) & (beat < voices.steal)
-    return tuple(sorted(int(pitch) for pitch in voices.pitch[sounding]))
+    start = voices.start
+    if not len(start):
+        return ()
+    hi = int(np.searchsorted(start, beat, side='right'))
+    if hi == 0:
+        return ()
+    lo = int(np.searchsorted(voices.max_end, beat, side='right')) if voices.max_end is not None else 0
+    if lo >= hi:
+        return ()
+    sounding = (beat < voices.end[lo:hi]) & (beat < voices.steal[lo:hi])
+    return tuple(sorted(int(pitch) for pitch in voices.pitch[lo:hi][sounding]))

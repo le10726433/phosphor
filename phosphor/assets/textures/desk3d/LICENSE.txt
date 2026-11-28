@@ -1,0 +1,15 @@
+CC0 1.0 Universal (Public Domain) Texture & HDRI Sources
+========================================================
+All photographic PBR maps and studio HDRI probes in this directory are sourced
+from Poly Haven (https://polyhaven.com) under the CC0 1.0 Universal license:
+
+- desk: oak_veneer_01 — https://polyhaven.com/a/oak_veneer_01 (CC0 1.0)
+- wall: plastered_wall_02 — https://polyhaven.com/a/plastered_wall_02 (CC0 1.0)
+- hdri: studio_small_08 — https://polyhaven.com/a/studio_small_08 (CC0 1.0)
+
+Notes:
+- chassis_albedo.jpg, chassis_normal.jpg, and chassis_roughness.jpg are seamless
+  matte late-80s warm-beige ABS plastic derivatives of Poly Haven CC0 plastered_wall_02.
+- aluminum_albedo.jpg, aluminum_normal.jpg, and aluminum_roughness.jpg are seamless
+  horizontally brushed anodized aluminum derivatives of Poly Haven CC0 plastered_wall_02.
+- C1-170 faceplate silkscreen markings are composited at runtime over aluminum_albedo.jpg.

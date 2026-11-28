@@ -28,11 +28,22 @@ SHORTCUTS = (
     Shortcut('redo', 'Shift+Command+Z', 'Ctrl+Y or Ctrl+Shift+Z', 'general', 'Redo (Composer and Sandbox; shape builder keeps its own history)', 'Redo'),
     Shortcut('fullscreen', 'Control+Command+F', 'F11', 'general', 'Full screen (the app window)'),
     Shortcut('trace_only', 'Shift+Command+F', 'Ctrl+Shift+F', 'general', 'Trace only'),
+    # ⇧⌘3 is the macOS screenshot key, so the Mac uses ⌃⌘3 (like Full screen's ⌃⌘F).
+    Shortcut('desk3d', 'Control+Command+3', 'Ctrl+Shift+3', 'general', '3D Lab Bench'),
     Shortcut('escape', 'Escape', 'Escape', 'general', 'Leave full screen, Trace only or the full-screen trace'),
     Shortcut('play', 'Space', 'Space', 'general', 'Play / Stop (Composer and Sandbox)'),
     Shortcut('home', 'Home', 'Home', 'general', 'Go to start / loop start'),
     Shortcut('end', 'End', 'End', 'general', 'Stop at song end (Composer)'),
     Shortcut('zoom_song', 'Command+0', 'Ctrl+0', 'general', 'Zoom to song (Composer)'),
+    Shortcut('zoom_selection', 'Shift+Command+0', 'Ctrl+Shift+0', 'general', 'Zoom to selection (Composer)'),
+    Shortcut('toggle_library', 'Command+B', 'Ctrl+B', 'general', 'Show or hide Library'),
+    Shortcut('panel_input', 'Command+1', 'Ctrl+1', 'general', 'Toggle Input panel'),
+    Shortcut('panel_scene', 'Command+2', 'Ctrl+2', 'general', 'Toggle Scene panel'),
+    Shortcut('panel_mix', 'Command+3', 'Ctrl+3', 'general', 'Toggle Mix panel'),
+    Shortcut('panel_appearance', 'Command+4', 'Ctrl+4', 'general', 'Toggle Appearance panel'),
+    Shortcut('panel_signal', 'Command+5', 'Ctrl+5', 'general', 'Toggle Signal output panel'),
+    Shortcut('switch_workspace', 'Command+\\', 'Ctrl+\\', 'general', 'Switch Composer / Sandbox'),
+    Shortcut('quick_add', 'Command+K', 'Ctrl+K', 'general', 'Quick Add (search and add objects, equations, transforms, recipes)'),
     Shortcut('copy', 'Command+C', 'Ctrl+C', 'Composer timeline; shape builder', 'Copy selection', 'Copy'),
     Shortcut('cut', 'Command+X', 'Ctrl+X', 'Composer timeline; shape builder', 'Cut selection', 'Cut'),
     Shortcut('paste', 'Command+V', 'Ctrl+V', 'Composer timeline; shape builder', 'Paste selection (timeline: at playhead)', 'Paste'),
@@ -136,8 +147,11 @@ def filter_shortcuts(query, platform=None, preferences=None):
 
 # Menu groups for Preferences › Controls › Keyboard shortcuts (UI2): the rebindable actions
 # (storage/shortcut_bindings.SCOPES) by the menu or place that holds them, in menu order.
-MENU_GROUPS = (('File', ('new', 'open', 'save', 'save_as')), ('Edit', ('undo', 'redo')),
-               ('View', ('zoom_song', 'fullscreen', 'trace_only', 'escape')), ('Transport', ('play', 'home', 'end')),
+MENU_GROUPS = (('File', ('new', 'open', 'save', 'save_as')), ('Edit', ('undo', 'redo', 'quick_add')),
+               ('View', ('zoom_song', 'zoom_selection', 'toggle_library', 'panel_input', 'panel_scene',
+                         'panel_mix', 'panel_appearance', 'panel_signal', 'switch_workspace',
+                         'fullscreen', 'trace_only', 'desk3d', 'escape')),
+               ('Transport', ('play', 'home', 'end')),
                ('Objects list', ('object_mute', 'object_solo', 'object_unmute_all')),
                ('Composer timeline', ('split_clip', 'add_marker', 'note_duplicate', 'note_split', 'note_join',
                                       'note_legato', 'note_quantize')))

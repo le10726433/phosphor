@@ -17,7 +17,7 @@ from unittest.mock import patch
 import numpy as np
 import soundfile
 from PySide6.QtCore import Qt, QPoint, QPointF, QMimeData, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QWheelEvent
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QKeySequence, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -156,9 +156,11 @@ with tempfile.TemporaryDirectory() as folder:
             from phosphor.engine import audio_edit
             w.set_project(audio_edit.set_gain_points(w.project, index, ((0., 1., 'linear'), (.5, .25, 'linear')))[0]); w.commit_history()
             header(0); header(1, Qt.KeyboardModifier.ShiftModifier); assert view.track_picks == {0, 1}
-            view.setFocus(); QTest.keyClick(view, Qt.Key.Key_C, CTRL)
+            copy_seq = QKeySequence(QKeySequence.StandardKey.Copy)[0]
+            paste_seq = QKeySequence(QKeySequence.StandardKey.Paste)[0]
+            view.setFocus(); QTest.keyClick(view, copy_seq.key(), copy_seq.keyboardModifiers())
             header(2)
-            steps(lambda: QTest.keyClick(view, Qt.Key.Key_V, CTRL), 'Add audio tracks')
+            steps(lambda: QTest.keyClick(view, paste_seq.key(), paste_seq.keyboardModifiers()), 'Add audio tracks')
             pasted = w.project.audio_tracks
             assert [x.name for x in pasted] == ['Drums', 'Audio 2', 'Audio 3', 'Drums', 'Audio 2'], pasted
             assert view.track_picks == {3, 4}
@@ -233,6 +235,7 @@ with tempfile.TemporaryDirectory() as folder:
             preview.count_in_seconds = 0.
             assert not view.grab().isNull()
         finally:
+            QApplication.clipboard().clear()
             w.history_timer.stop(); w.timer.stop(); w.force_close = True
-            w.shutdown_audio(); w.release_views(); w.close()
+            w.shutdown_audio(); w.close(); app.processEvents()
 print('Audio tracks passed: add, drop, move across tracks, mute/solo/gain, collapse, selection, reorder, copy/paste/duplicate/delete, Undo, save/reopen, meters, export.')

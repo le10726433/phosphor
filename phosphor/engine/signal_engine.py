@@ -7,7 +7,10 @@ import threading
 from phosphor.storage.audio_writer import AudioWriter
 import math
 import numpy as np
-from phosphor.engine.solids import SOLIDS, POLYGONS, geometry, route_for
+from phosphor.engine.solids import (
+    SOLIDS, POLYGONS, ANIMATED_SOLIDS, ShapeParams, validate_shape_params,
+    geometry, route_for, solid_geometry, solid_route, dynamic_solid_route_at,
+)
 from phosphor.engine.automation import gain_at, validate_lanes, lane_points, SHAPE_LANE_FIELDS, live_lanes, parked_lanes, parked_lane
 from phosphor.engine.switch_lane import ON, switch_on, validate_switch
 from phosphor.engine import switch_sweep
@@ -27,9 +30,11 @@ from phosphor.engine.motion_path import Motion,guide_route,sample_route
 from phosphor.engine.drawing_motion import render_components,segment_indices,validate_routes
 from phosphor.engine.route_plan import ROUTE_OFF, ROUTE_MODES, plan_route
 from phosphor.engine import noise_loops
+from phosphor.engine.matrix_rain import MATRIX_OBJECT, MatrixConfig, matrix_route_at, validate_matrix
 from phosphor.engine.object_replace import equation_variables
 from phosphor.engine.transforms import (apply_stack, active, has_noise, uses_position, route_positions, noise_curve,
-    validate_stack, Param, path_window, trim_route, validate_path, variable_values, validate_object_variables)
+    validate_stack, Param, path_window, trim_route, validate_path, variable_values, validate_object_variables,
+    has_topology, apply_topology_stack, pointify_params, pointify_phase)
 
 
 MAX_SPIN = 10.0
@@ -148,6 +153,8 @@ class Shape:
     # Object variables (T5, engine/transforms.py): function_plot.Variables shared by the stack
     # and by Path Start and Trace, evaluated once per pose frame before the stack.
     transform_variables: tuple = ()
+    matrix: MatrixConfig | None = None
+    shape_params: ShapeParams | None = None
 
     def _fields(self):
         return tuple(getattr(self, field.name) for field in fields(self))
@@ -354,6 +361,10 @@ def _original_route(kind, payload):
     if kind == MODEL_OBJECT:
         vertices, edges, route, connectors = model_route(payload); joins = {tuple(c) for c in np.asarray(connectors).reshape(-1, 2)}
         return vertices, [tuple(e) for e in np.asarray(edges).reshape(-1, 2) if tuple(e) not in joins], route, np.asarray(connectors).reshape(-1, 2)
+    if kind == 'solid_param':
+        solid_name, params = payload
+        vertices, edges = solid_geometry(solid_name, params)
+        return vertices, [tuple(e) for e in edges], solid_route(solid_name, params), np.empty((0, 2), dtype=int)
     vertices, edges = geometry(payload)
     return vertices, [tuple(e) for e in edges], route_for(payload), np.empty((0, 2), dtype=int)
 
@@ -414,6 +425,7 @@ def _route_key(shape):
     if shape.solid == CUSTOM_OBJECT: return CUSTOM_OBJECT, shape.custom
     if shape.solid == TEXT_OBJECT: return TEXT_OBJECT, getattr(shape, 'text', DEFAULT_TEXT)
     if shape.solid == MODEL_OBJECT: return MODEL_OBJECT, shape.model
+    if shape.shape_params is not None: return 'solid_param', (shape.solid, shape.shape_params)
     return 'solid', shape.solid
 
 
@@ -424,18 +436,25 @@ def shape_geometry(shape, route_mode=ROUTE_OFF):
     if shape.solid == PARAMETRIC_OBJECT:
         edges, route, _ = parametric_graph()
         return parametric_points(shape.plot, 0.), edges, route
+    if shape.solid == MATRIX_OBJECT:
+        return matrix_route_at(shape.matrix or MatrixConfig(), 0.)[:3]
+    if shape.solid in ANIMATED_SOLIDS:
+        return dynamic_solid_route_at(shape.solid, shape.shape_params, 0.)[:3]
     if route_mode != ROUTE_OFF: return planned_route(*_route_key(shape), route_mode)[:3]
     if shape.solid == CUSTOM_OBJECT: return compiled(shape.custom)[:3]
     if shape.solid == TEXT_OBJECT: return text_geometry(getattr(shape,'text',DEFAULT_TEXT))
     if shape.solid == MODEL_OBJECT: return model_route(shape.model)[:3]
-    vertices,edges=geometry(shape.solid)
-    return vertices,edges,route_for(shape.solid)
+    vertices,edges=solid_geometry(shape.solid, shape.shape_params)
+    return vertices,edges,solid_route(shape.solid, shape.shape_params)
 
 
 def shape_connectors(shape, route_mode=ROUTE_OFF):
     """Part-tuple suffix naming edges that only join separate strokes or components."""
     if shape.solid == PARAMETRIC_OBJECT: return (parametric_graph()[2],)
     if shape.solid == RECURRENCE_OBJECT: return (parametric_graph(shape.recurrence.steps-1)[2],)
+    if shape.solid == MATRIX_OBJECT: return (matrix_route_at(shape.matrix or MatrixConfig(), 0.)[3],)
+    if shape.solid in ANIMATED_SOLIDS:
+        return (dynamic_solid_route_at(shape.solid, shape.shape_params, 0.)[3],)
     if route_mode != ROUTE_OFF: return (planned_route(*_route_key(shape), route_mode)[3],)
     if shape.solid == TEXT_OBJECT: return (text_route(getattr(shape,'text',DEFAULT_TEXT))[3],)
     if shape.solid == MODEL_OBJECT: return (model_route(shape.model)[3],)
@@ -609,7 +628,7 @@ def inspect_plan(frame, drawing_hz, shapes, mode, speed,motion_time_offset=0.,sh
 
 def _scene_plan(frame, drawing_hz, shapes, mode, speed, motion_time_offset, shape_redraw_count, route_mode, tempo,
                 switches, provenance=None):
-    parts, owners, objects, noises, colours, weights = [], [], [], [], [], []
+    parts, owners, objects, noises, colours, weights, pointifies = [], [], [], [], [], [], []
     sources, absent = [], []  # Per part: (posed shape index, component); shapes left off the path.
     seconds = frame / drawing_hz
     for index, shape in enumerate(posed_shapes(shapes,max(0.,frame/drawing_hz+motion_time_offset))):
@@ -618,9 +637,11 @@ def _scene_plan(frame, drawing_hz, shapes, mode, speed, motion_time_offset, shap
             gain, off = switches[index]
             if off: shape = replace(shape, transforms=tuple(replace(step, enabled=False) if flag else step
                                                             for step, flag in zip(shape.transforms, off)))
-        curve = noise_curve(object_stack(shape))
+        stack = object_stack(shape)
+        curve = noise_curve(stack)
         # Object variables (T5): once per pose frame, before the path window and the stack.
         values = variable_values(shape.transform_variables, seconds, tempo)
+        pt_spec = pointify_params(stack, seconds, tempo, values)
         start, trace = path_window(shape.path_start, shape.path_trace, seconds, tempo, values) if windowed(shape) else (0., 1.)
         if shape.muted or trace == 0 or gain == 0:  # Its share of the cycle goes to the rest.
             if provenance is not None: absent.append((index, 'muted' if shape.muted else 'off' if gain == 0 else 'trace'))
@@ -633,10 +654,11 @@ def _scene_plan(frame, drawing_hz, shapes, mode, speed, motion_time_offset, shap
         if shape.solid==CUSTOM_OBJECT and (shape.custom.guides or shape.custom.attachments or (shape_redraw_count>1 and len(render_components(shape.custom))>1)):
             built = builder_motion_parts(shape,frame/drawing_hz,max(0.,frame/drawing_hz+motion_time_offset),route_mode)
             noise = [None]*len(built)
-            if object_stack(shape): built, noise = _stacked_parts(built, shape, seconds, tempo, values)
+            if stack: built, noise = _stacked_parts(built, shape, seconds, tempo, values)
             for component, (part, intensity) in enumerate(zip(built, noise)):
                 if not full: part, intensity = _trimmed(part, intensity, start, trace)
-                sources.append((index, component)); parts.append(part); owners.append(-1); noises.append(None if intensity is None else intensity*shape.shape_size); colours.append(curve); weights.append(weight)
+                p_pt = None if pt_spec is None else (max(pt_spec[0], 2), pt_spec[1])
+                sources.append((index, component)); parts.append(part); owners.append(-1); noises.append(None if intensity is None else intensity*shape.shape_size); colours.append(curve); weights.append(weight); pointifies.append(p_pt)
             continue
         center = np.array([shape.position_x, shape.position_y])
         if shape.solid in (PARAMETRIC_OBJECT, RECURRENCE_OBJECT):
@@ -651,30 +673,53 @@ def _scene_plan(frame, drawing_hz, shapes, mode, speed, motion_time_offset, shap
             else:  # The window in s: N equal steps from start, trace long (unwrapped for exact samples).
                 positions = start + trace*positions
                 raw, wrapped = points_at(plot, seconds, positions, tempo)
-            if object_stack(shape):
+            if stack and has_topology(stack):
+                posed3d, route, edges, connectors, noise = apply_topology_stack(raw, route, edges, connectors, stack, seconds, s=wrapped, tempo=tempo, values=values)
+                points = _final_pose(seconds, shape, posed3d)[:, :2] * shape.shape_size
+                sources.append((index, 0)); parts.append((points, center, route, edges, connectors))
+                owners.append(-1)
+                noises.append(None if noise is None else noise*shape.shape_size); colours.append(curve); weights.append(weight)
+                pointifies.append(None if pt_spec is None else (max(pt_spec[0], 2), pt_spec[1]))
+                continue
+            if stack:
                 points, noise = posed_object(seconds, shape, raw, s=wrapped, tempo=tempo, values=values)
                 points = points * shape.shape_size; matrix = None
             else:
                 matrix = projected_solid(seconds, shape, vertices=np.eye(3)) * shape.shape_size
                 points, noise = raw @ matrix, None
             sources.append((index, 0)); parts.append((points, center, route, edges, connectors))
-            owners.append(len(objects)); objects.append((plot, matrix, shape, seconds, positions))
+            owners.append(len(objects)); objects.append((plot, matrix, shape, seconds, positions, values))
             noises.append(None if noise is None else noise*shape.shape_size); colours.append(curve); weights.append(weight)
+            pointifies.append(None if pt_spec is None else (max(pt_spec[0], 2), pt_spec[1]))
             continue
-        connectors = shape_connectors(shape, route_mode)
-        raw, edges, route = shape_geometry(shape, route_mode)
+        if shape.solid == MATRIX_OBJECT:
+            raw, edges, route, mat_conn = matrix_route_at(shape.matrix or MatrixConfig(), seconds, tempo, values)
+            connectors = (mat_conn,) if len(mat_conn) else ()
+        elif shape.solid in ANIMATED_SOLIDS:
+            raw, edges, route, dyn_conn = dynamic_solid_route_at(shape.solid, shape.shape_params, seconds)
+            connectors = (dyn_conn,) if len(dyn_conn) else ()
+        else:
+            connectors = shape_connectors(shape, route_mode)
+            raw, edges, route = shape_geometry(shape, route_mode)
         s = cached_route_positions(raw, route) if uses_position(shape.transforms, tuple(values)) else None
-        vertices, noise = posed_object(seconds, shape, raw, s, tempo=tempo, values=values)
-        vertices = vertices * shape.shape_size
+        if stack and has_topology(stack):
+            base_conn = connectors[0] if connectors else np.empty((0, 2), dtype=int)
+            posed3d, route, edges, new_conn, noise = apply_topology_stack(_resting(shape, raw), route, edges, base_conn, stack, seconds, s, tempo, values=values)
+            vertices = _final_pose(seconds, shape, posed3d)[:, :2] * shape.shape_size
+            connectors = (new_conn,) if len(new_conn) else ()
+        else:
+            vertices, noise = posed_object(seconds, shape, raw, s, tempo=tempo, values=values)
+            vertices = vertices * shape.shape_size
         part = (vertices, center, route, edges, *connectors)
         if not full: part, noise = _trimmed(part, noise, start, trace)
+        p_pt = None if pt_spec is None else (max(pt_spec[0], len(part[0])), pt_spec[1])
         sources.append((index, 0)); parts.append(part); owners.append(-1)
-        noises.append(None if noise is None else noise*shape.shape_size); colours.append(curve); weights.append(weight)
+        noises.append(None if noise is None else noise*shape.shape_size); colours.append(curve); weights.append(weight); pointifies.append(p_pt)
     if not parts:
         if provenance is not None:
             provenance.update(_provenance(shapes, np.zeros(2, dtype=np.int64), np.zeros(2, dtype=np.int64),
                                           np.zeros(1, dtype=bool), sources, absent))
-        return np.zeros((2,2)),np.zeros((2,2)),np.array([0.,1.]),None,None
+        return np.zeros((2,2)),np.zeros((2,2)),np.array([0.,1.]),None,None,None
     if shape_redraw_count>1 and len(parts)>1:
         if sum((len(route)-1)*shape_redraw_count+1 for _,_,route,*_ in parts)>262144:
             raise ValueError('Shape redraw exceeds the path detail budget. Reduce the total draws or simplify the shapes.')
@@ -717,7 +762,19 @@ def _scene_plan(frame, drawing_hz, shapes, mode, speed, motion_time_offset, shap
         clean = np.asarray(travel, dtype=bool)
         for array in (point_intensity, point_curve, clean): array.setflags(write=False)
         noisy = (point_intensity, point_curve, curves, clean)
-    return local, centers, cumulative, exact, noisy
+    pointify = None
+    if any(spec is not None for spec in pointifies):
+        spans = []
+        seg_part = part_of[:-1]
+        same_part = (seg_part == part_of[1:]) & ~np.asarray(travel, dtype=bool)
+        for pidx, spec in enumerate(pointifies):
+            if spec is None: continue
+            idx = np.flatnonzero((seg_part == pidx) & same_part)
+            if not len(idx): continue
+            d0, d1 = float(cumulative[idx[0]]), float(cumulative[idx[-1] + 1])
+            if d1 > d0 + 1e-12: spans.append((d0, d1, spec[0], spec[1]))
+        if spans: pointify = tuple(spans)
+    return local, centers, cumulative, exact, noisy, pointify
 
 def _provenance(shapes, part_of, vertex_of, travel, sources, absent):
     """PlanProvenance fields, with posed indices mapped back to the scene's shape indices."""
@@ -827,12 +884,19 @@ def _shape_audio(times, phase, envelope, settings, frequency=None, parts=False):
 
 def _beam(planned, times, phase, frequency, settings):
     """(local, centre) beam positions of one scene plan at these samples' phases."""
-    local, centers, cumulative, exact, noisy = planned
+    local, centers, cumulative, exact, noisy, pointify = planned
     position=np.mod(phase,1)
     if settings.corner_dwell_us>0:
         corners=corner_positions(local,centers,cumulative)
         position=dwell_phase(position,frequency,corners,settings.corner_dwell_us)
     distance = position * cumulative[-1]
+    if pointify is not None:
+        distance = distance.copy()
+        for d0, d1, pt_count, glide in pointify:
+            in_part = (distance >= d0) & (distance < d1)
+            if in_part.any():
+                local_u = (distance[in_part] - d0) / (d1 - d0)
+                distance[in_part] = d0 + pointify_phase(local_u, pt_count, glide) * (d1 - d0)
     segment = np.minimum(np.searchsorted(cumulative, distance, side='right') - 1,
                          len(cumulative) - 2)
     fraction = (distance - cumulative[segment]) / np.maximum(cumulative[segment + 1] - cumulative[segment], 1e-15)
@@ -891,14 +955,14 @@ def exact_parametric(selected, times, segment, fraction, exact, tempo=120.):
         hit = np.flatnonzero(owner == index)
         start = segment[hit]
         positions = s_of[start] + fraction[hit] * (s_of[start + 1] - s_of[start])
-        plot, matrix, shape, seconds, _ = objects[index]
+        plot, matrix, shape, seconds, _, obj_values = objects[index]
         positions = np.where(positions > 1, positions - 1, np.where(positions < 0, positions + 1, positions))
         try:
             points = (recurrence_points_at(plot, seconds, positions, tempo)[0]
                       if shape.solid == RECURRENCE_OBJECT else compiled_plot(plot)(times[hit], positions, tempo))
         except ValueError: continue  # Keep the polyline; the editor reports the error.
         if matrix is None:  # A transform stack: pose each sample's point at this frame's time.
-            try: selected[hit] = posed_object(seconds, shape, points, s=positions, tempo=tempo)[0] * shape.shape_size
+            try: selected[hit] = posed_object(seconds, shape, points, s=positions, tempo=tempo, values=obj_values)[0] * shape.shape_size
             except ValueError: continue
         else: selected[hit] = points @ matrix
     return selected
@@ -955,8 +1019,12 @@ def validate(settings):
         validate_switch(lane_points(shape.lanes, ON), 'Object On/Off')
         if live_lanes(shape.lanes) and is_motion_guide(shape): raise ValueError('Motion guides cannot carry lanes.')
         shape.animation.validate()
-        if shape.solid not in (*SOLIDS,TEXT_OBJECT,CUSTOM_OBJECT,MODEL_OBJECT,PARAMETRIC_OBJECT,RECURRENCE_OBJECT) or not all(np.isfinite(getattr(shape, key)) for key in Shape.__dataclass_fields__ if key not in ('solid', 'text', 'custom','uid','motion','model','plot','recurrence','transforms','path_start','path_trace','lanes','lane_clock','animation','transform_variables')):
+        if shape.solid not in (*SOLIDS,TEXT_OBJECT,MATRIX_OBJECT,CUSTOM_OBJECT,MODEL_OBJECT,PARAMETRIC_OBJECT,RECURRENCE_OBJECT) or not all(np.isfinite(getattr(shape, key)) for key in Shape.__dataclass_fields__ if key not in ('solid', 'text', 'custom','uid','motion','model','plot','recurrence','matrix','shape_params','transforms','path_start','path_trace','lanes','lane_clock','animation','transform_variables')):
             raise ValueError('Every shape must have a supported solid and finite parameters.')
+        if shape.shape_params is not None:
+            validate_shape_params(shape.shape_params)
+        if shape.solid == MATRIX_OBJECT:
+            validate_matrix(shape.matrix, tuple(v.name for v in shape.transform_variables))
         if shape.solid == PARAMETRIC_OBJECT:
             if not isinstance(shape.plot,FunctionPlot):raise ValueError('Parametric equations are missing.')
             compiled_plot(shape.plot)
